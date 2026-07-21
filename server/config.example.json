@@ -1,0 +1,27 @@
+{
+  "port": 7681,
+  "token": "CHANGE_ME_用 openssl rand -hex 24 生成",
+  "apps": {
+    "kimi": [
+      "/home/user/.kimi-code/bin/kimi"
+    ],
+    "claude": [
+      "/home/user/.local/bin/claude"
+    ],
+    "tmux": [
+      "/usr/bin/tmux"
+    ],
+    "shell": [
+      "/bin/bash",
+      "-l"
+    ],
+    "claude-c": [
+      "/home/user/.local/bin/claude",
+      "--continue"
+    ],
+    "claude-r": [
+      "/home/user/.local/bin/claude",
+      "--resume"
+    ]
+  }
+}

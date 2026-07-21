@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="primary">#FF4F8CFF</color>
+
+    <color name="terminal_bg">#FF000000</color>
+    <color name="status_bg">#FF14171C</color>
+    <color name="status_text">#FF9AA4B0</color>
+    <color name="keybar_bg">#FF1A1E24</color>
+    <color name="key_background">#FF2E343D</color>
+    <color name="key_text">#FFE6EAF0</color>
+    <color name="ctrl_active">#FF3D6FD1</color>
+    <color name="tab_dead_text">#FF6B7480</color>
+</resources>

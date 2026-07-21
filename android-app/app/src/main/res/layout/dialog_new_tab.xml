@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ScrollView 包裹：8 个程序选项 + 会话列表较高，小屏/横屏时可滚动 -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingLeft="24dp"
+        android:paddingRight="24dp"
+        android:paddingTop="16dp">
+
+        <RadioGroup
+            android:id="@+id/dialog_radio_app"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <RadioButton
+                android:id="@+id/dialog_radio_shell"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="@string/app_shell" />
+
+            <RadioButton
+                android:id="@+id/dialog_radio_kimi"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_kimi" />
+
+            <RadioButton
+                android:id="@+id/dialog_radio_claude"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_claude" />
+
+            <RadioButton
+                android:id="@+id/dialog_radio_tmux"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_tmux" />
+
+            <RadioButton
+                android:id="@+id/dialog_radio_kimi_c"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_kimi_c" />
+
+            <RadioButton
+                android:id="@+id/dialog_radio_kimi_r"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_kimi_r" />
+
+            <RadioButton
+                android:id="@+id/dialog_radio_claude_c"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_claude_c" />
+
+            <RadioButton
+                android:id="@+id/dialog_radio_claude_r"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_claude_r" />
+        </RadioGroup>
+
+        <!-- 任何 app 都可以填会话名；留空由 Activity 自动生成 <app>-<序号> -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/dialog_til_session"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="@string/hint_session">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/dialog_edit_session"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="text"
+                android:singleLine="true" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- 接入已有会话：打开对话框时异步 GET /sessions，结果动态塞进 container -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/label_existing_sessions"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/dialog_sessions_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/sessions_loading" />
+
+        <LinearLayout
+            android:id="@+id/dialog_sessions_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+    </LinearLayout>
+</ScrollView>

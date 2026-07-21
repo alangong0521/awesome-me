@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">awesome me</string>
+
+    <!-- SetupActivity -->
+    <string name="setup_subtitle">从手机远程操作 Mac 上的终端程序</string>
+    <string name="hint_host">主机地址（如 192.168.1.5）</string>
+    <string name="hint_port">端口</string>
+    <string name="hint_token">Token</string>
+    <string name="label_app">选择程序</string>
+    <string name="app_shell">Shell(直达终端,自己敲 kimi/claude/opencode)</string>
+    <string name="app_kimi">kimi</string>
+    <string name="app_claude">claude</string>
+    <string name="app_tmux">tmux</string>
+    <string name="app_claude_c">claude -c（继续上次对话）</string>
+    <string name="app_claude_r">claude -r（选择历史会话）</string>
+    <string name="app_kimi_c">kimi -c（继续上次对话）</string>
+    <string name="app_kimi_r">kimi -r（选择历史会话）</string>
+    <string name="hint_session">会话名（可空，自动生成；所有标签都跑在 tmux 会话里）</string>
+    <string name="error_session_invalid">会话名只能包含字母、数字、下划线和连字符</string>
+    <string name="action_test">测试连接</string>
+    <string name="action_connect">连接</string>
+    <string name="action_save_machine">存为机器</string>
+    <string name="action_ignore_battery">后台保活：忽略电池优化</string>
+    <string name="battery_already_ignored">已在电池优化白名单中</string>
+    <string name="battery_request_failed">无法打开系统电池优化设置</string>
+    <string name="machine_manual">(手动输入)</string>
+    <string name="dialog_machine_name_title">存为机器</string>
+    <string name="hint_machine_name">机器名(如 公司服务器)</string>
+    <string name="machine_saved">已保存机器:%1$s</string>
+    <string name="error_machine_name_required">请输入机器名</string>
+    <string name="error_host_required">请输入主机地址</string>
+    <string name="error_port_invalid">端口必须是 1-65535 的数字</string>
+    <string name="error_token_required">请输入 token</string>
+    <string name="test_success">连接成功</string>
+    <string name="test_unauthorized">token 错误 (401)</string>
+    <string name="test_http_error">服务器返回异常：HTTP %1$d</string>
+    <string name="test_unreachable">无法连接：%1$s</string>
+
+    <!-- TerminalActivity -->
+    <string name="missing_params">缺少连接参数</string>
+    <string name="state_connecting">连接中…</string>
+    <string name="state_connected">已连接</string>
+    <string name="state_disconnected">连接断开</string>
+    <string name="state_failed">连接失败</string>
+    <string name="state_reconnecting">重连中…（第 %1$d 次）</string>
+    <string name="state_exited">会话已结束 (exit %1$s)</string>
+    <string name="key_keyboard">键盘</string>
+    <string name="key_to_landscape">横屏</string>
+    <string name="key_to_portrait">竖屏</string>
+    <string name="copied_to_clipboard">已复制到剪贴板</string>
+    <string name="dialog_session_ended_title">会话结束</string>
+    <string name="dialog_process_exited">远程程序已退出（exit code: %1$s）</string>
+    <string name="dialog_disconnected">连接已断开</string>
+    <string name="dialog_connect_failed">连接失败：%1$s</string>
+    <string name="dialog_exit_title">断开连接？</string>
+    <string name="dialog_exit_message">关闭所有标签，断开全部连接并退出？</string>
+    <string name="dialog_error_title">错误</string>
+    <string name="dialog_new_tab_title">新建标签</string>
+    <string name="dialog_close_tab_title">关闭标签？</string>
+    <string name="dialog_close_tab_message">断开连接并关闭标签 %1$s？</string>
+    <string name="error_last_tab">至少保留一个标签</string>
+    <string name="action_create">创建</string>
+    <string name="action_close_tab">关闭标签</string>
+    <string name="action_reconnect">重新连接</string>
+    <string name="action_back">返回</string>
+    <string name="action_disconnect">断开</string>
+    <string name="action_cancel">取消</string>
+    <string name="error_jni_load_failed">终端组件（libtermux.so）加载失败，请检查构建产物</string>
+    <string name="error_attach_failed">终端初始化失败：%1$s</string>
+
+    <!-- 新建标签对话框：接入已有会话 -->
+    <string name="label_existing_sessions">接入已有会话（tmux）</string>
+    <string name="sessions_loading">加载中…</string>
+    <string name="sessions_none">无可用会话</string>
+    <string name="sessions_item_attached">%1$s（已被接入）</string>
+
+    <!-- 后台保活（KeepAliveService） -->
+    <string name="notif_channel_keepalive">后台保活</string>
+    <string name="notif_keepalive_title">awesome me 保持连接中</string>
+    <string name="notif_keepalive_text">%1$d 个会话</string>
+
+    <!-- 文件推送 -->
+    <string name="notif_channel_file">文件推送</string>
+    <string name="notif_file_pushed_title">服务端推送文件，点击下载</string>
+    <string name="dialog_file_pushed_title">服务端推送文件</string>
+    <string name="dialog_file_pushed_message">%1$s（%2$s）</string>
+    <string name="action_download">下载</string>
+    <string name="download_failed">下载启动失败：%1$s</string>
+    <string name="file_pushed_toast">收到文件：%1$s</string>
+</resources>

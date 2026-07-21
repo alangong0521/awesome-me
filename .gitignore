@@ -1,0 +1,10 @@
+# 真实配置含 token,绝不上传
+server/config.json
+
+# 构建产物
+android-app/build/
+android-app/.gradle/
+android-app/app/build/
+*.apk
+
+node_modules/

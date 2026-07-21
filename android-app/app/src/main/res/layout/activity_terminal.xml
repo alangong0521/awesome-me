@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/terminal_bg"
+    android:orientation="vertical">
+
+    <!-- 标签栏：每个打开的会话一个标签，右端"+"新建 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/keybar_bg"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <HorizontalScrollView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/tabs_container"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingLeft="4dp"
+                android:paddingRight="4dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp" />
+        </HorizontalScrollView>
+
+        <Button
+            android:id="@+id/btn_add_tab"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginRight="4dp"
+            android:backgroundTint="@color/key_background"
+            android:minWidth="48dp"
+            android:text="+"
+            android:textColor="@color/key_text"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- 状态栏：标签名 @ host:port · 连接状态 · 终端标题 -->
+    <TextView
+        android:id="@+id/status_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/status_bg"
+        android:ellipsize="end"
+        android:fontFamily="monospace"
+        android:paddingLeft="10dp"
+        android:paddingRight="10dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:singleLine="true"
+        android:textColor="@color/status_text"
+        android:textSize="12sp" />
+
+    <com.termux.view.TerminalView
+        android:id="@+id/terminal_view"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <!-- 特殊键栏：修饰/功能键在前，⏎ 和方向键固定排在最右(用户指定) -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/keybar_bg"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingLeft="4dp"
+            android:paddingRight="4dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp">
+
+            <Button
+                android:id="@+id/key_esc"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="64dp"
+                android:text="ESC"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/key_ctrl"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="64dp"
+                android:text="CTRL"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/key_tab"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="64dp"
+                android:text="TAB"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/key_keyboard"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="64dp"
+                android:text="@string/key_keyboard"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/key_orientation"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="64dp"
+                android:text="@string/key_to_landscape"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+
+            <!-- 回车与方向键：排在栏的最右边 -->
+            <Button
+                android:id="@+id/key_enter"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="64dp"
+                android:text="⏎"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/key_left"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="56dp"
+                android:text="←"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/key_up"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="56dp"
+                android:text="↑"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/key_down"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="56dp"
+                android:text="↓"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/key_right"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="2dp"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="56dp"
+                android:text="→"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+
+        </LinearLayout>
+    </HorizontalScrollView>
+
+</LinearLayout>

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 后台保活：前台服务（Android 14 / targetSdk 34 必须声明类型及对应权限） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 后台保活：防 CPU 休眠 / Wi-Fi 省电掐断 WebSocket 心跳 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Android 13+ 发系统通知（后台收到文件推送时）需要运行时授权 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 登录页"忽略电池优化"引导按钮用 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.RemoteTerminal"
+        android:usesCleartextTraffic="true">
+
+        <activity
+            android:name=".SetupActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- configChanges：旋转/键盘弹出等不重建 Activity，避免 WebSocket 断线 -->
+        <activity
+            android:name=".TerminalActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 后台保活前台服务：TerminalActivity 有活跃标签期间常驻 -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="保持远程终端的 WebSocket 长连接在 App 退到后台后不被系统休眠掐断" />
+        </service>
+
+        <!-- 后台文件推送通知的点击接收器（点通知 → DownloadManager 下载） -->
+        <receiver
+            android:name=".DownloadFileReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.calla.remoteterminal.DOWNLOAD_FILE" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>
