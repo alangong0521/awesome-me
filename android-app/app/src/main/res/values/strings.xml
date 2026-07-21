@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">awesome me</string>
+    <string name="app_name">AwesomeMe</string>
 
     <!-- SetupActivity -->
     <string name="setup_subtitle">从手机远程操作 Mac 上的终端程序</string>
@@ -80,7 +80,7 @@
 
     <!-- 后台保活（KeepAliveService） -->
     <string name="notif_channel_keepalive">后台保活</string>
-    <string name="notif_keepalive_title">awesome me 保持连接中</string>
+    <string name="notif_keepalive_title">AwesomeMe 保持连接中</string>
     <string name="notif_keepalive_text">%1$d 个会话</string>
 
     <!-- 文件推送 -->

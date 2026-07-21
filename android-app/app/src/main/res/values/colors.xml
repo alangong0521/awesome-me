@@ -9,6 +9,13 @@
     <color name="keybar_bg">#FF1A1E24</color>
     <color name="key_background">#FF2E343D</color>
     <color name="key_text">#FFE6EAF0</color>
-    <color name="ctrl_active">#FF3D6FD1</color>
+    <color name="ctrl_active">#FF4F8CFF</color>
     <color name="tab_dead_text">#FF6B7480</color>
+
+    <!-- UI 精修:分隔线 / 状态行分级 / 连接状态着色 -->
+    <color name="divider">#FF2A2F37</color>
+    <color name="text_dim">#FF6B7480</color>
+    <color name="state_connected">#FF4CAF50</color>
+    <color name="state_pending">#FFFFC107</color>
+    <color name="state_error">#FFF44336</color>
 </resources>

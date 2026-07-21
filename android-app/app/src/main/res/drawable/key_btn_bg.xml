@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 键栏按钮统一背景:9dp 圆角(颜色由 backgroundTint 给,常态深灰/点亮 primary 蓝) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <corners android:radius="9dp" />
+    <solid android:color="#FFFFFF" />
+</shape>

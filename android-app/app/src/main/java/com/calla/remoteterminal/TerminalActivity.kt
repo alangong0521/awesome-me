@@ -16,6 +16,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.util.TypedValue
 import android.view.KeyEvent
@@ -131,6 +134,9 @@ class TerminalActivity : AppCompatActivity(),
         var reconnectAttempt = 0
 
         var stateText = ""
+
+        /** 最近一次连接状态（状态行着色用：已连接绿/重连中黄/断开红）。 */
+        var lastState: RemoteTerminalSession.State? = null
     }
 
     private lateinit var terminalView: TerminalView
@@ -347,10 +353,11 @@ class TerminalActivity : AppCompatActivity(),
 
     private fun refreshMachinesBar() {
         machinesContainer.removeAllViews()
-        val selectedBg = ContextCompat.getColorStateList(this, R.color.ctrl_active)
         val normalBg = ContextCompat.getColorStateList(this, R.color.key_background)
-        val textColor = ContextCompat.getColor(this, R.color.key_text)
+        val selectedText = ContextCompat.getColor(this, android.R.color.white)
+        val normalText = ContextCompat.getColor(this, R.color.status_text)
         for ((name, _) in machineBarEntries()) {
+            val selected = name == selectedMachine
             machinesContainer.addView(Button(this).apply {
                 text = name
                 isAllCaps = false
@@ -358,11 +365,17 @@ class TerminalActivity : AppCompatActivity(),
                 minWidth = 0
                 minimumWidth = 0
                 setPadding(dp(12), 0, dp(12), 0)
-                backgroundTintList = if (name == selectedMachine) selectedBg else normalBg
-                setTextColor(textColor)
+                // 选中 = 亮底 + 2dp primary 描边;未选中 = 深灰 + 降对比文字
+                if (selected) {
+                    setBackgroundResource(R.drawable.tab_bg_selected)
+                    setTextColor(selectedText)
+                } else {
+                    setBackgroundResource(R.drawable.key_btn_bg)
+                    backgroundTintList = normalBg
+                    setTextColor(normalText)
+                }
                 layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
+                    LinearLayout.LayoutParams.WRAP_CONTENT, dp(32)
                 ).apply { marginEnd = dp(4) }
                 setOnClickListener { selectMachine(name) }
             })
@@ -621,14 +634,15 @@ class TerminalActivity : AppCompatActivity(),
         })
     }
 
-    /** 标签栏重绘：只画当前选中机器的标签；当前标签高亮；已断开加 ✕、重连中加 ↻ 前缀。 */
+    /** 标签栏重绘：只画当前选中机器的标签；当前标签 = 亮底+primary 描边；已断开加 ✕、重连中加 ↻ 前缀。 */
     private fun refreshTabBar() {
         tabsContainer.removeAllViews()
-        val currentBg = ContextCompat.getColorStateList(this, R.color.ctrl_active)
         val normalBg = ContextCompat.getColorStateList(this, R.color.key_background)
-        val normalText = ContextCompat.getColor(this, R.color.key_text)
+        val selectedText = ContextCompat.getColor(this, android.R.color.white)
+        val normalText = ContextCompat.getColor(this, R.color.status_text)
         val deadText = ContextCompat.getColor(this, R.color.tab_dead_text)
         for (tab in visibleTabs()) {
+            val selected = tab === currentTab
             val button = Button(this).apply {
                 text = when {
                     tab.dead -> "✕ ${tab.label}"
@@ -640,11 +654,21 @@ class TerminalActivity : AppCompatActivity(),
                 minWidth = 0
                 minimumWidth = 0
                 setPadding(dp(12), 0, dp(12), 0)
-                backgroundTintList = if (tab === currentTab) currentBg else normalBg
-                setTextColor(if (tab.dead) deadText else normalText)
+                if (selected) {
+                    setBackgroundResource(R.drawable.tab_bg_selected)
+                } else {
+                    setBackgroundResource(R.drawable.key_btn_bg)
+                    backgroundTintList = normalBg
+                }
+                setTextColor(
+                    when {
+                        tab.dead -> deadText
+                        selected -> selectedText
+                        else -> normalText
+                    }
+                )
                 layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
+                    LinearLayout.LayoutParams.WRAP_CONTENT, dp(32)
                 ).apply { marginEnd = dp(4) }
                 setOnClickListener { switchToTab(tab) }
                 setOnLongClickListener {
@@ -668,6 +692,7 @@ class TerminalActivity : AppCompatActivity(),
     ) {
         if (isFinishing || isDestroyed) return
         val tab = tabs.firstOrNull { it.session === session } ?: return
+        tab.lastState = state
         when (state) {
             RemoteTerminalSession.State.CONNECTING ->
                 tab.stateText = getString(R.string.state_connecting)
@@ -991,13 +1016,18 @@ class TerminalActivity : AppCompatActivity(),
         currentTab?.session?.sendUserInput(code)
     }
 
-    /** CTRL/SHIFT/ALT 粘滞修饰键统一点亮/熄灭（点亮 = ctrl_active 底色）。 */
+    /** CTRL/SHIFT/ALT 粘滞修饰键统一点亮/熄灭（点亮 = primary 蓝填充 + 白字，更醒目）。 */
     private fun updateModifierButtons() {
         val active = ContextCompat.getColorStateList(this, R.color.ctrl_active)
         val normal = ContextCompat.getColorStateList(this, R.color.key_background)
-        ctrlButton.backgroundTintList = if (stickyCtrl) active else normal
-        shiftButton.backgroundTintList = if (stickyShift) active else normal
-        altButton.backgroundTintList = if (stickyAlt) active else normal
+        val white = ContextCompat.getColor(this, android.R.color.white)
+        val keyText = ContextCompat.getColor(this, R.color.key_text)
+        for ((btn, on) in listOf(
+            ctrlButton to stickyCtrl, shiftButton to stickyShift, altButton to stickyAlt
+        )) {
+            btn.backgroundTintList = if (on) active else normal
+            btn.setTextColor(if (on) white else keyText)
+        }
     }
 
     private fun toggleSoftKeyboard() {
@@ -1020,14 +1050,39 @@ class TerminalActivity : AppCompatActivity(),
             statusText.text = ""
             return
         }
+        // 分级着色:标签名亮色;[app]/版本号最暗;host:port/标题次暗;
+        // 连接状态按状态着色(已连接绿/重连中·连接中黄/断开·失败红)
         val sb = StringBuilder()
-            .append(tab.label).append(" [").append(tab.app).append(']')
-            .append(" @ ").append(tab.host).append(':').append(tab.port)
-        if (tab.stateText.isNotEmpty()) sb.append("  ·  ").append(tab.stateText)
-        termTitle?.takeIf { it.isNotEmpty() }?.let { sb.append("  ·  ").append(it) }
-        // 末尾固定显示版本号:让用户一眼确认装的是不是最新版(排查"以为装了新版"问题)
-        sb.append("  ·  v").append(BuildConfig.VERSION_NAME)
-        statusText.text = sb.toString()
+        val spans = ArrayList<Triple<Int, Int, Int>>()
+        fun append(s: String, color: Int) {
+            val start = sb.length
+            sb.append(s)
+            spans.add(Triple(start, sb.length, color))
+        }
+        val bright = ContextCompat.getColor(this, R.color.key_text)
+        val dim = ContextCompat.getColor(this, R.color.status_text)
+        val dimmer = ContextCompat.getColor(this, R.color.text_dim)
+        append(tab.label, bright)
+        append(" [${tab.app}]", dimmer)
+        append(" @ ${tab.host}:${tab.port}", dim)
+        if (tab.stateText.isNotEmpty()) {
+            val stateColor = ContextCompat.getColor(
+                this, when {
+                    tab.reconnecting -> R.color.state_pending
+                    tab.dead -> R.color.state_error
+                    tab.lastState == RemoteTerminalSession.State.OPEN -> R.color.state_connected
+                    else -> R.color.state_pending
+                }
+            )
+            append("  ·  ${tab.stateText}", stateColor)
+        }
+        termTitle?.takeIf { it.isNotEmpty() }?.let { append("  ·  $it", dim) }
+        append("  ·  v${BuildConfig.VERSION_NAME}", dimmer)
+        val ss = SpannableString(sb.toString())
+        for ((start, end, color) in spans) {
+            ss.setSpan(ForegroundColorSpan(color), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        statusText.text = ss
     }
 
     // ---------- TerminalViewClient ----------

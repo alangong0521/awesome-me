@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 选中标签/选中机器的背景:更亮一档的底 + 2dp primary 描边(与键钮同圆角) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <corners android:radius="9dp" />
+    <solid android:color="#3A4350" />
+    <stroke android:width="2dp" android:color="#4F8CFF" />
+</shape>
