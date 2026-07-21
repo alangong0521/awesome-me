@@ -167,6 +167,7 @@ class TerminalActivity : AppCompatActivity(),
     private var stickyCtrl = false
     private var stickyShift = false
     private var stickyAlt = false
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var baseFontPx = 0
     private var termTitle: String? = null
     private var endDialogShowing = false
@@ -1065,22 +1066,28 @@ class TerminalActivity : AppCompatActivity(),
     // ---------- 特殊键栏 ----------
 
     private fun setupExtraKeys() {
+        // 底栏功能键统一走 sendBarKey/sendArrowKeyWithMods:粘滞 ALT/CTRL/SHIFT 对其生效
+        // (v1.3.7 前这些键直发字节,绕过 onCodePoint,ALT+⏎ 等组合根本到不了被控端)
         findViewById<Button>(R.id.key_enter).setOnClickListener {
-            currentTab?.session?.sendUserInput(byteArrayOf(0x0D))
+            // ⏎:裸 0x0D;SHIFT+⏎ = CSI-u(实测 kimi 换行);CTRL+⏎ = C-j(实测也换行)
+            sendBarKey(
+                byteArrayOf(0x0D),
+                ctrl = byteArrayOf(0x0A),
+                shift = "\u001B[13;2u".toByteArray()
+            )
         }
         findViewById<Button>(R.id.key_esc).setOnClickListener {
-            currentTab?.session?.sendUserInput(byteArrayOf(0x1B))
+            sendBarKey(byteArrayOf(0x1B))
         }
-        findViewById<Button>(R.id.key_up).setOnClickListener { sendArrowKey(KeyEvent.KEYCODE_DPAD_UP) }
-        findViewById<Button>(R.id.key_down).setOnClickListener { sendArrowKey(KeyEvent.KEYCODE_DPAD_DOWN) }
-        // 退格 = 0x7F(DEL),与多数终端/backspace 约定一致
+        findViewById<Button>(R.id.key_up).setOnClickListener { sendArrowKeyWithMods(KeyEvent.KEYCODE_DPAD_UP) }
+        findViewById<Button>(R.id.key_down).setOnClickListener { sendArrowKeyWithMods(KeyEvent.KEYCODE_DPAD_DOWN) }
         findViewById<Button>(R.id.key_backspace).setOnClickListener {
-            currentTab?.session?.sendUserInput(byteArrayOf(0x7F))
+            sendBarKey(byteArrayOf(0x7F), ctrl = byteArrayOf(0x08))
         }
-        findViewById<Button>(R.id.key_left).setOnClickListener { sendArrowKey(KeyEvent.KEYCODE_DPAD_LEFT) }
-        findViewById<Button>(R.id.key_right).setOnClickListener { sendArrowKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
+        findViewById<Button>(R.id.key_left).setOnClickListener { sendArrowKeyWithMods(KeyEvent.KEYCODE_DPAD_LEFT) }
+        findViewById<Button>(R.id.key_right).setOnClickListener { sendArrowKeyWithMods(KeyEvent.KEYCODE_DPAD_RIGHT) }
         findViewById<Button>(R.id.key_tab).setOnClickListener {
-            currentTab?.session?.sendUserInput(byteArrayOf(0x09))
+            sendBarKey(byteArrayOf(0x09))
         }
         // CTRL/SHIFT/ALT 三个"粘滞"修饰键:点一下点亮,下一个字符带修饰;再点取消。
         // CTRL 走 Termux 默认控制字符映射(readControlKey);SHIFT/ALT 在 onCodePoint 手工实现。
@@ -1174,6 +1181,44 @@ class TerminalActivity : AppCompatActivity(),
             ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
         orientationButton.setText(if (toLandscape) R.string.key_to_portrait else R.string.key_to_landscape)
+    }
+
+    /**
+     * 底栏功能键统一入口:让粘滞修饰键对底栏生效(它们不走 IME 的 onCodePoint)。
+     * ALT = 前置 0x1B(Meta);CTRL = 指定控制序列(⏎→C-j、⌫→C-h、方向→CSI 1;5X);
+     * SHIFT = 指定序列(目前仅 ⏎→CSI-u 13;2u);其余键 SHIFT 无操作。
+     * 任一粘滞修饰生效后全部复位(与 onCodePoint 的一次性约定一致)。
+     */
+    private fun sendBarKey(base: ByteArray, ctrl: ByteArray? = null, shift: ByteArray? = null) {
+        val rs = currentTab?.session ?: return
+        var payload = when {
+            stickyShift && shift != null -> shift
+            stickyCtrl && ctrl != null -> ctrl
+            else -> base
+        }
+        if (stickyAlt) payload = byteArrayOf(0x1B) + payload
+        if (stickyCtrl || stickyShift || stickyAlt) {
+            stickyCtrl = false
+            stickyShift = false
+            stickyAlt = false
+            updateModifierButtons()
+        }
+        rs.sendUserInput(payload)
+    }
+
+    /** 方向键的修饰版:无修饰走 KeyHandler(DECCKM 感知);CTRL → CSI 1;5X(词移动);ALT 由 sendBarKey 前置。 */
+    private fun sendArrowKeyWithMods(keyCode: Int) {
+        val emulator = terminalView.mEmulator ?: return
+        val base = KeyHandler.getCode(
+            keyCode, 0, emulator.isCursorKeysApplicationMode, emulator.isKeypadApplicationMode
+        )?.toByteArray() ?: return
+        val letter = when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP -> 'A'
+            KeyEvent.KEYCODE_DPAD_DOWN -> 'B'
+            KeyEvent.KEYCODE_DPAD_RIGHT -> 'C'
+            else -> 'D'
+        }
+        sendBarKey(base, ctrl = "\u001B[1;5$letter".toByteArray())
     }
 
     /**
@@ -1290,14 +1335,16 @@ class TerminalActivity : AppCompatActivity(),
     }
 
     /**
-     * kimi/claude 标签输入框点按定位光标:kimi 不吃鼠标点击,点按位置与光标
-     * 同行不同列时,发 ←/→ 方向键(次数=列差)把光标挪到点按处;同行同列或其他行
-     * 不拦截(其他行照旧走 Termux 的鼠标转发=TUI 点选)。返回 true=已消费该 UP。
+     * kimi/claude 标签输入框点按定位光标。
+     * 多行版：先检测输入框边框（kimi/claude 的输入框是 Unicode 边框 ╭/│/╰），
+     * 点按落在框内任意行 → 先发 ↑/↓（行差），待远端重绘刷新本地光标后再发 ←/→（列差）。
+     * 为什么必须先检测边框：空输入框里 ↑ 是历史召回，没确认在框内绝不能发垂直方向键。
+     * 检测不到框时退化为 v1.3.7 的"仅同行 ←/→"（无垂直移动，安全）；其他行照旧鼠标转发。
      */
     private fun tryCursorRowTap(up: MotionEvent): Boolean {
         val tab = currentTab ?: return false
-        if (tab.app !in TUI_APPS) return false
         val emulator = terminalView.mEmulator ?: return false
+        if (tab.app !in TUI_APPS) return false
         if (!emulator.isMouseTrackingActive) return false // 无 mouse tracking 时单击本就不转发
         // 必须是干净单击:位移小于 touch slop、按下时间短(否则是滚动/长按选择)
         val slop = ViewConfiguration.get(this).scaledTouchSlop
@@ -1311,18 +1358,101 @@ class TerminalActivity : AppCompatActivity(),
         val lineSpacing = terminalView.height / emulator.mRows
         if (lineSpacing <= 0) return false
         val row = (viewY / lineSpacing).toInt() + topRowOffset()
-        if (row != emulator.cursorRow) return false
         val colWidth = terminalView.width.toFloat() / emulator.mColumns
         if (colWidth <= 0) return false
         val col = (up.x / colWidth).toInt()
-        val delta = col - emulator.cursorCol
-        if (delta == 0) return false // 正点在光标上:放行维持原行为
-        val key = if (delta < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
-        repeat(minOf(abs(delta), 100)) { sendArrowKey(key) }
-        // 点输入框就是要打字:弹键盘,与其他单击行为一致
+
+        val box = detectInputBox(emulator)
+        if (box != null && row in box.contentTop..box.contentBottom) {
+            val targetCol = col.coerceIn(box.leftCol + 1, box.rightCol - 1)
+            val dRow = row - emulator.cursorRow
+            if (dRow != 0) {
+                val key = if (dRow < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN
+                repeat(minOf(abs(dRow), 60)) { sendArrowKey(key) }
+                // 垂直移动后本地光标位置要等远端重绘才刷新,列移动延后补
+                mainHandler.postDelayed({ sendHorizontalTo(emulator, targetCol) }, 150)
+            } else {
+                sendHorizontalTo(emulator, targetCol)
+            }
+            showIme()
+            return true
+        }
+        if (row == emulator.cursorRow) {
+            // 退化路径(无边框/检测失败):只允许同行水平移动,绝不发垂直键
+            sendHorizontalTo(emulator, col)
+            showIme()
+            return true
+        }
+        return false // 其他行:放行,Termux 手势层照常转发鼠标点击(TUI 点选)
+    }
+
+    /** 按列差发 ←/→ 把光标挪到 targetCol。 */
+    private fun sendHorizontalTo(emulator: com.termux.terminal.TerminalEmulator, targetCol: Int) {
+        if (isFinishing || isDestroyed) return
+        val dCol = targetCol - emulator.cursorCol
+        if (dCol == 0) return
+        val key = if (dCol < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+        repeat(minOf(abs(dCol), 100)) { sendArrowKey(key) }
+    }
+
+    private fun showIme() {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.showSoftInput(terminalView, InputMethodManager.SHOW_IMPLICIT)
-        return true
+    }
+
+    /** 输入框(Unicode 边框)检测结果:内容行范围 + 左右边框列。 */
+    private class InputBox(val contentTop: Int, val contentBottom: Int, val leftCol: Int, val rightCol: Int)
+
+    /** 检测缓存:(cursorRow, cursorCol, box);光标一移动即失效重测。 */
+    private var boxCache: Triple<Int, Int, InputBox?>? = null
+
+    private fun detectInputBox(emulator: com.termux.terminal.TerminalEmulator): InputBox? {
+        val curRow = emulator.cursorRow
+        val curCol = emulator.cursorCol
+        boxCache?.let { (r, c, box) -> if (r == curRow && c == curCol) return box }
+        val box = scanInputBox(emulator, curRow)
+        boxCache = Triple(curRow, curCol, box)
+        return box
+    }
+
+    /** 从光标行向上找 ╭、向下找 ╰(中间必须都是 │ 行,否则不在框内)。 */
+    private fun scanInputBox(emulator: com.termux.terminal.TerminalEmulator, curRow: Int): InputBox? {
+        val cols = emulator.mColumns
+        val rows = emulator.mRows
+        var top = -1
+        var r = curRow
+        while (r >= 0 && r > curRow - 40) {
+            // 注意:tmux 画框可能带前导空格(实测框线 '│' 在 col 1 而非 col 0),
+            // 所以按"首个非空格字符"判断行类型
+            val t = emulator.getSelectedText(0, r, cols - 1, r).trim()
+            when {
+                t.startsWith("│") -> r--
+                t.startsWith("╭") -> {
+                    top = r; break
+                }
+                else -> return null // 光标不在 │ 内容行上,或中途断框
+            }
+        }
+        if (top < 0) return null
+        var bottom = -1
+        r = curRow
+        while (r < rows && r < curRow + 40) {
+            val t = emulator.getSelectedText(0, r, cols - 1, r).trim()
+            when {
+                t.startsWith("│") -> r++
+                t.startsWith("╰") -> {
+                    bottom = r; break
+                }
+                else -> return null
+            }
+        }
+        if (bottom < 0 || bottom - top < 2) return null
+        val topLine = emulator.getSelectedText(0, top, cols - 1, top)
+        val left = topLine.indexOf('╭')
+        val bottomLine = emulator.getSelectedText(0, bottom, cols - 1, bottom)
+        val right = bottomLine.lastIndexOf('╯')
+        if (left < 0 || right <= left + 1) return null
+        return InputBox(top + 1, bottom - 1, left, right)
     }
 
     override fun onScale(scale: Float): Float {
