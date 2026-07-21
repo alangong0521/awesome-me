@@ -63,6 +63,35 @@
             android:text="+"
             android:textColor="@color/key_text"
             android:textSize="14sp" />
+
+        <!-- 推送收件箱:文件推送记录(未读角标);点开看列表/下载 -->
+        <FrameLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginRight="4dp">
+
+            <Button
+                android:id="@+id/btn_inbox"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:backgroundTint="@color/key_background"
+                android:minWidth="48dp"
+                android:text="⬇"
+                android:textColor="@color/key_text"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/inbox_badge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|end"
+                android:background="@drawable/inbox_badge_bg"
+                android:minWidth="16dp"
+                android:gravity="center"
+                android:textColor="@android:color/white"
+                android:textSize="9sp"
+                android:visibility="gone" />
+        </FrameLayout>
     </LinearLayout>
 
     <View
@@ -97,6 +126,13 @@
             android:id="@+id/terminal_view"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
+
+        <!-- 桌面标签(noVNC):每个"桌面"标签一个 WebView,切换时 show/hide -->
+        <WebView
+            android:id="@+id/desktop_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
 
         <TextView
             android:id="@+id/empty_hint"

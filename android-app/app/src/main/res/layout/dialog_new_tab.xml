@@ -57,6 +57,12 @@
                 android:text="@string/app_tmux" />
 
             <RadioButton
+                android:id="@+id/dialog_radio_desktop"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_desktop" />
+
+            <RadioButton
                 android:id="@+id/dialog_radio_kimi_c"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

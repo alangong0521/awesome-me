@@ -14,6 +14,7 @@
     <string name="app_tmux">tmux</string>
     <string name="app_claude_c">claude -c（继续上次对话）</string>
     <string name="app_claude_r">claude -r（选择历史会话）</string>
+    <string name="app_desktop">桌面（noVNC 远程桌面）</string>
     <string name="app_kimi_c">kimi -c（继续上次对话）</string>
     <string name="app_kimi_r">kimi -r（选择历史会话）</string>
     <string name="hint_session">会话名（可空，自动生成；所有标签都跑在 tmux 会话里）</string>
@@ -91,4 +92,8 @@
     <string name="action_download">下载</string>
     <string name="download_failed">下载启动失败：%1$s</string>
     <string name="file_pushed_toast">收到文件：%1$s</string>
+    <string name="inbox_title">推送收件箱</string>
+    <string name="inbox_empty">暂无推送记录</string>
+    <string name="inbox_clear">清空</string>
+    <string name="inbox_downloaded">已下载</string>
 </resources>

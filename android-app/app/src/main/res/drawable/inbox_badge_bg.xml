@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 收件箱未读角标:红色圆形底 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#E53935" />
+    <padding android:left="3dp" android:top="1dp" android:right="3dp" android:bottom="1dp" />
+</shape>

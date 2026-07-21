@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- launchd:noVNC(websockify)常驻——把 noVNC 网页服务绑到 tailnet IP:6080,转发本机 5900(屏幕共享)。
+     拷到 ~/Library/LaunchAgents/ 后:launchctl bootstrap gui/$(id -u) 本文件 -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.calla.novnc</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/websockify</string>
+        <string>--web</string>
+        <string>/Users/CHANGE_ME_USER/novnc-web</string>
+        <string>CHANGE_ME_MAC_TAILNET_IP:6080</string>
+        <string>localhost:5900</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/novnc-websockify.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/novnc-websockify.log</string>
+</dict>
+</plist>

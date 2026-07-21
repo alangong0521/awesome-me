@@ -109,7 +109,8 @@ class TerminalActivity : AppCompatActivity(),
     }
 
     /** 一个标签。session 的生命周期由 Activity 管理（重连时会整个替换）。
-     *  每个标签自带连接三元组（多机切换：不同标签可以连不同机器）。 */
+     *  每个标签自带连接三元组（多机切换：不同标签可以连不同机器）。
+     *  desktop=true 时是 noVNC 桌面标签:无终端会话,内容是自己的 WebView。 */
     private class Tab(
         val id: Int,
         val label: String,
@@ -121,6 +122,7 @@ class TerminalActivity : AppCompatActivity(),
         val token: String,
         /** 机器显示名（机器列表里的名字；查不到则为 host），用于标签标题。 */
         val machineName: String,
+        val desktop: Boolean = false,
     ) {
         /** 双指缩放的字号，按标签各自记住。 */
         var fontScale = 1f
@@ -137,6 +139,9 @@ class TerminalActivity : AppCompatActivity(),
 
         /** 最近一次连接状态（状态行着色用：已连接绿/重连中黄/断开红）。 */
         var lastState: RemoteTerminalSession.State? = null
+
+        /** 桌面标签的 WebView(懒创建,挂在终端容器里,切标签只 show/hide 不销毁)。 */
+        var webView: android.webkit.WebView? = null
     }
 
     private lateinit var terminalView: TerminalView
@@ -145,6 +150,7 @@ class TerminalActivity : AppCompatActivity(),
     private lateinit var machinesContainer: LinearLayout
     private lateinit var emptyHint: TextView
     private lateinit var ctrlButton: Button
+    private lateinit var inboxBadge: TextView
 
     private lateinit var host: String
     private var port: Int = 7681
@@ -202,6 +208,8 @@ class TerminalActivity : AppCompatActivity(),
         machinesContainer = findViewById(R.id.machines_container)
         emptyHint = findViewById(R.id.empty_hint)
         ctrlButton = findViewById(R.id.key_ctrl)
+        inboxBadge = findViewById(R.id.inbox_badge)
+        findViewById<Button>(R.id.btn_inbox).setOnClickListener { showInboxDialog() }
 
         baseFontPx = TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_SP, BASE_FONT_SP, resources.displayMetrics
@@ -225,6 +233,7 @@ class TerminalActivity : AppCompatActivity(),
         }
 
         openTab(initialApp, initialSession)
+        refreshInboxBadge()
 
         // Android 13+ 发系统通知需要运行时权限（后台收到文件推送时用），只请求一次
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -289,6 +298,8 @@ class TerminalActivity : AppCompatActivity(),
         for (tab in tabs) {
             tab.session?.destroy()
             tab.session = null
+            tab.webView?.destroy()
+            tab.webView = null
         }
         super.onDestroy()
     }
@@ -327,6 +338,32 @@ class TerminalActivity : AppCompatActivity(),
         tab.session = createSession(tab)
         tabs.add(tab)
         // 新建的标签归属即用户当前想看的:机器栏选中跟随到该机(空态随之解除)
+        selectedMachine = tab.machineName
+        refreshMachinesBar()
+        updateKeepAlive()
+        switchToTab(tab)
+    }
+
+    /**
+     * 新建 noVNC 桌面标签:WebView 加载该机器的 6080(noVNC 网页客户端)。
+     * 没有终端会话;VNC 密码由 noVNC 页面提示输入(localStorage 记住),不硬编码在 App 里。
+     */
+    private fun openDesktopTab(machine: Machine? = null) {
+        val mHost: String
+        val mPort: Int
+        val mToken: String
+        val mName: String
+        if (machine == null) {
+            mHost = host; mPort = port; mToken = token; mName = defaultMachineName()
+        } else {
+            mHost = machine.host
+            mPort = machine.port.toIntOrNull() ?: 7681
+            mToken = machine.token
+            mName = machine.name
+        }
+        val tab = Tab(nextTabId++, "$mName/桌面", "desktop", null, null, mHost, mPort, mToken, mName, desktop = true)
+        tab.stateText = "noVNC :6080"
+        tabs.add(tab)
         selectedMachine = tab.machineName
         refreshMachinesBar()
         updateKeepAlive()
@@ -391,6 +428,32 @@ class TerminalActivity : AppCompatActivity(),
         if (first != null) switchToTab(first) else showEmptyState()
     }
 
+    /** 桌面标签的 WebView:懒创建一次后只 show/hide(切后台/切标签不重载页面)。 */
+    private fun showDesktop(tab: Tab, container: android.widget.FrameLayout) {
+        for (t in tabs) t.webView?.visibility = View.GONE
+        var wv = tab.webView
+        if (wv == null) {
+            wv = android.webkit.WebView(this).apply {
+                layoutParams = android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                )
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true // noVNC 用 localStorage 记 VNC 密码等设置
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                settings.builtInZoomControls = true
+                settings.displayZoomControls = false
+                setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                webViewClient = android.webkit.WebViewClient() // 链接都在本 WebView 内打开
+                loadUrl("http://${tab.host}:6080/vnc.html?autoconnect=true&resize=scale")
+            }
+            container.addView(wv)
+            tab.webView = wv
+        }
+        wv.visibility = View.VISIBLE
+    }
+
     /** 当前选中机器可见的标签(标签栏只画这些)。 */
     private fun visibleTabs(): List<Tab> = tabs.filter { it.machineName == selectedMachine }
 
@@ -398,6 +461,7 @@ class TerminalActivity : AppCompatActivity(),
     private fun showEmptyState() {
         currentTab = null
         terminalView.visibility = View.INVISIBLE
+        for (t in tabs) t.webView?.visibility = View.GONE
         emptyHint.visibility = View.VISIBLE
         refreshTabBar()
         refreshStatus()
@@ -424,7 +488,15 @@ class TerminalActivity : AppCompatActivity(),
     private fun switchToTab(tab: Tab) {
         // 从空态恢复:终端区显示回来
         emptyHint.visibility = View.GONE
-        terminalView.visibility = View.VISIBLE
+        // 桌面标签:显示自己的 WebView,藏 TerminalView;普通标签反之
+        val container = findViewById<android.widget.FrameLayout>(R.id.terminal_container)
+        if (tab.desktop) {
+            terminalView.visibility = View.GONE
+            showDesktop(tab, container)
+        } else {
+            for (t in tabs) t.webView?.visibility = View.GONE
+            terminalView.visibility = View.VISIBLE
+        }
         if (currentTab === tab) {
             refreshTabBar()
             refreshStatus()
@@ -455,6 +527,11 @@ class TerminalActivity : AppCompatActivity(),
     private fun closeTab(tab: Tab) {
         tab.session?.destroy()
         tab.session = null
+        tab.webView?.let { wv ->
+            (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+            wv.destroy()
+        }
+        tab.webView = null
         tabs.remove(tab)
         updateKeepAlive()
         if (tabs.isEmpty()) {
@@ -563,6 +640,12 @@ class TerminalActivity : AppCompatActivity(),
 
         // 手动处理确定按钮，校验失败时不关闭对话框
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            if (radioApp.checkedRadioButtonId == R.id.dialog_radio_desktop) {
+                // 桌面标签:无需会话名,直接开 noVNC WebView 标签
+                openDesktopTab(selectedMachine())
+                dialog.dismiss()
+                return@setOnClickListener
+            }
             val app = when (radioApp.checkedRadioButtonId) {
                 R.id.dialog_radio_kimi -> "kimi"
                 R.id.dialog_radio_claude -> "claude"
@@ -754,30 +837,128 @@ class TerminalActivity : AppCompatActivity(),
     override fun onFilePushed(session: RemoteTerminalSession, name: String, size: Long) {
         if (isFinishing || isDestroyed) return
         Log.i("TerminalActivity", "收到文件推送: $name ($size B)")
-        // 去重(问题3 根因):服务端的广播会送达本机每个标签的连接,同一次推送要在
-        // 多标签间去重;但 v3 用无限期集合去重,常驻 Activity(保活服务让进程长期
-        // 不死)下,同名同大小的再次推送会被永远吞掉——用户 10:40 推送的
-        // app-debug.apk 与 08:17 的 size 完全相同,就这样被吞了。改为 10s 时间窗:
-        // 窗口内(多标签同时收到的同一广播)去重,窗口外的再次推送照样提示。
+        // 时间窗去重(见 FileInbox 注释;广播会送达本机每个标签的连接)
         val now = System.currentTimeMillis()
         val key = "$name|$size"
         val last = pushedFileKeys[key]
         if (last != null && now - last < PUSH_DEDUPE_WINDOW_MS) return
         pushedFileKeys[key] = now
-        // 顺手清理过期记录,防长时间运行无限增长
         val it = pushedFileKeys.entries.iterator()
         while (it.hasNext()) {
             if (now - it.next().value > 60_000L) it.remove()
         }
-        // 保底:无论走对话框还是通知,先弹 Toast 确保用户一定感知到
+        // Toast 即时感知 + 记入收件箱(可随时回看/下载);不弹模态对话框打断操作;
+        // 后台时仍发系统通知
         Toast.makeText(this, getString(R.string.file_pushed_toast, name), Toast.LENGTH_LONG).show()
-        // 推送来自哪个标签的连接,下载 URL 就用哪个标签的机器(多机场景)
         val tab = tabs.firstOrNull { it.session === session }
-        if (inForeground) {
-            showFilePushedDialog(name, size, tab)
-        } else {
+        FileInbox.add(
+            inboxPrefs(),
+            InboxItem(
+                name = name, size = size, time = now,
+                host = tab?.host ?: host, port = tab?.port ?: port, token = tab?.token ?: token,
+                machine = tab?.machineName ?: defaultMachineName(), downloaded = false,
+            )
+        )
+        refreshInboxBadge()
+        if (!inForeground) {
             postFilePushedNotification(name, size, tab)
         }
+    }
+
+    // ---------- 推送收件箱 ----------
+
+    private fun inboxPrefs() = getSharedPreferences(MachineStore.PREFS_NAME, MODE_PRIVATE)
+
+    /** 角标 = 未下载条数;0 时隐藏。 */
+    private fun refreshInboxBadge() {
+        val n = FileInbox.unreadCount(inboxPrefs())
+        if (n <= 0) {
+            inboxBadge.visibility = View.GONE
+        } else {
+            inboxBadge.visibility = View.VISIBLE
+            inboxBadge.text = if (n > 99) "99+" else n.toString()
+        }
+    }
+
+    private fun showInboxDialog() {
+        val items = FileInbox.load(inboxPrefs())
+        val scroll = android.widget.ScrollView(this)
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), 0)
+        }
+        scroll.addView(list)
+        if (items.isEmpty()) {
+            list.addView(TextView(this).apply {
+                text = getString(R.string.inbox_empty)
+                setPadding(0, dp(16), 0, dp(16))
+            })
+        }
+        val fmt = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
+        for (item in items) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, dp(6), 0, dp(6))
+            }
+            val info = TextView(this).apply {
+                text = buildString {
+                    append(item.name).append("（").append(formatSize(item.size)).append("）\n")
+                    append(fmt.format(java.util.Date(item.time))).append(" · ").append(item.machine)
+                }
+                textSize = 13f
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            row.addView(info)
+            if (item.downloaded) {
+                row.addView(TextView(this).apply {
+                    text = getString(R.string.inbox_downloaded)
+                    textSize = 12f
+                    setTextColor(ContextCompat.getColor(this@TerminalActivity, R.color.state_connected))
+                })
+            } else {
+                row.addView(Button(this).apply {
+                    text = getString(R.string.action_download)
+                    textSize = 12f
+                    setOnClickListener {
+                        if (downloadInboxItem(item)) {
+                            FileInbox.markDownloaded(inboxPrefs(), item)
+                            refreshInboxBadge()
+                            it.visibility = View.GONE
+                            info.append(" · ${getString(R.string.inbox_downloaded)}")
+                        }
+                    }
+                })
+            }
+            list.addView(row)
+        }
+        val builder = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.inbox_title)
+            .setView(scroll)
+            .setNegativeButton(R.string.action_cancel, null)
+        if (items.isNotEmpty()) {
+            builder.setNeutralButton(R.string.inbox_clear) { _, _ ->
+                FileInbox.clear(inboxPrefs())
+                refreshInboxBadge()
+            }
+        }
+        builder.show()
+    }
+
+    /** 用收件箱条目自己的机器三元组下载;成功返回 true。 */
+    private fun downloadInboxItem(item: InboxItem): Boolean {
+        val encodedName = URLEncoder.encode(item.name, Charsets.UTF_8.name()).replace("+", "%20")
+        val url = "http://${item.host}:${item.port}/files/$encodedName" +
+            "?token=${URLEncoder.encode(item.token, Charsets.UTF_8.name())}"
+        val request = DownloadManager.Request(Uri.parse(url))
+            .setTitle(item.name)
+            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, item.name)
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        return runCatching {
+            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+        }.onFailure {
+            Toast.makeText(this, getString(R.string.download_failed, it.message ?: ""), Toast.LENGTH_LONG).show()
+        }.isSuccess
     }
 
     private fun formatSize(size: Long): String = when {
@@ -807,15 +988,6 @@ class TerminalActivity : AppCompatActivity(),
         }.onFailure {
             Toast.makeText(this, getString(R.string.download_failed, it.message ?: ""), Toast.LENGTH_LONG).show()
         }
-    }
-
-    private fun showFilePushedDialog(name: String, size: Long, tab: Tab?) {
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.dialog_file_pushed_title)
-            .setMessage(getString(R.string.dialog_file_pushed_message, name, formatSize(size)))
-            .setPositiveButton(R.string.action_download) { _, _ -> downloadPushedFile(name, tab) }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
     }
 
     /** App 在后台时的提示：系统通知，点击经 DownloadFileReceiver 触发同一个下载。 */
@@ -1064,7 +1236,11 @@ class TerminalActivity : AppCompatActivity(),
         val dimmer = ContextCompat.getColor(this, R.color.text_dim)
         append(tab.label, bright)
         append(" [${tab.app}]", dimmer)
-        append(" @ ${tab.host}:${tab.port}", dim)
+        if (tab.desktop) {
+            append(" @ ${tab.host}:6080", dim)
+        } else {
+            append(" @ ${tab.host}:${tab.port}", dim)
+        }
         if (tab.stateText.isNotEmpty()) {
             val stateColor = ContextCompat.getColor(
                 this, when {
@@ -1161,6 +1337,7 @@ class TerminalActivity : AppCompatActivity(),
     }
 
     override fun onSingleTapUp(e: MotionEvent) {
+        if (currentTab?.desktop == true) return // 桌面标签:noVNC 的鼠标操作,不弹键盘
         terminalView.requestFocus()
         // 根因修复（滚屏跳动）之二：fling 动画还在跑的时候点按屏幕（用户意图是"停住滚动"），
         // GestureDetector 会把这次点按当成干净单击回调到这里；若照旧翻译方向键/弹键盘，
