@@ -22,6 +22,7 @@ import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
@@ -55,6 +56,7 @@ import org.json.JSONObject
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 
 /**
  * 终端页：顶部标签栏 + 状态行 + 全屏 TerminalView + 底部特殊键栏。
@@ -95,6 +97,12 @@ class TerminalActivity : AppCompatActivity(),
 
         /** 文件推送去重窗口：同一 name|size 在该窗口内（多标签同时收到同一广播）只提示一次。 */
         private const val PUSH_DEDUPE_WINDOW_MS = 10_000L
+
+        /** 需要"输入框内点按定位光标"的 TUI 程序（kimi/claude 不吃鼠标点击，用方向键挪光标）。 */
+        private val TUI_APPS = setOf("kimi", "kimi-c", "kimi-r", "claude", "claude-c", "claude-r")
+
+        /** 点按定位：最长按下时长（超时视为滚动/选择，不拦截）。 */
+        private const val CURSOR_TAP_MAX_MS = 400L
     }
 
     /** 一个标签。session 的生命周期由 Activity 管理（重连时会整个替换）。
@@ -128,6 +136,8 @@ class TerminalActivity : AppCompatActivity(),
     private lateinit var terminalView: TerminalView
     private lateinit var statusText: TextView
     private lateinit var tabsContainer: LinearLayout
+    private lateinit var machinesContainer: LinearLayout
+    private lateinit var emptyHint: TextView
     private lateinit var ctrlButton: Button
 
     private lateinit var host: String
@@ -137,6 +147,10 @@ class TerminalActivity : AppCompatActivity(),
     private val tabs = ArrayList<Tab>()
     private var currentTab: Tab? = null
     private var nextTabId = 1
+
+    /** 机器栏当前选中的机器名。标签栏按它过滤显示——只是显示过滤,其他机器的标签
+     *  连接和会话在后台完全不受影响(不断连、继续收输出)。 */
+    private var selectedMachine = ""
 
     private var stickyCtrl = false
     private var stickyShift = false
@@ -179,6 +193,8 @@ class TerminalActivity : AppCompatActivity(),
         terminalView = findViewById(R.id.terminal_view)
         statusText = findViewById(R.id.status_text)
         tabsContainer = findViewById(R.id.tabs_container)
+        machinesContainer = findViewById(R.id.machines_container)
+        emptyHint = findViewById(R.id.empty_hint)
         ctrlButton = findViewById(R.id.key_ctrl)
 
         baseFontPx = TypedValue.applyDimension(
@@ -192,6 +208,7 @@ class TerminalActivity : AppCompatActivity(),
 
         setupExtraKeys()
         setupKeybarGestureExclusion()
+        setupImeResizeFreeze()
         findViewById<Button>(R.id.btn_add_tab).setOnClickListener { showNewTabDialog() }
 
         // terminal-emulator 的 JNI 库（libtermux.so）必须随 AAR 打进 APK；第一次
@@ -303,6 +320,9 @@ class TerminalActivity : AppCompatActivity(),
         val tab = Tab(nextTabId++, "$mName/$sessionName", app, sessionName, null, mHost, mPort, mToken, mName)
         tab.session = createSession(tab)
         tabs.add(tab)
+        // 新建的标签归属即用户当前想看的:机器栏选中跟随到该机(空态随之解除)
+        selectedMachine = tab.machineName
+        refreshMachinesBar()
         updateKeepAlive()
         switchToTab(tab)
     }
@@ -311,6 +331,64 @@ class TerminalActivity : AppCompatActivity(),
     private fun defaultMachineName(): String =
         MachineStore.load(getSharedPreferences(MachineStore.PREFS_NAME, MODE_PRIVATE))
             .firstOrNull { it.host == host }?.name ?: host
+
+    // ---------- 机器栏(顶部,按机器过滤标签显示) ----------
+
+    /** 机器栏条目:默认机器 + 已存机器列表 + 现有标签用到的机器名,按名去重。value 为机器配置(默认机器可能查不到,为 null)。 */
+    private fun machineBarEntries(): List<Pair<String, Machine?>> {
+        val stored = MachineStore.load(getSharedPreferences(MachineStore.PREFS_NAME, MODE_PRIVATE))
+        val entries = LinkedHashMap<String, Machine?>()
+        val defName = defaultMachineName()
+        entries[defName] = stored.firstOrNull { it.host == host }
+        for (m in stored) entries.putIfAbsent(m.name, m)
+        for (tab in tabs) entries.putIfAbsent(tab.machineName, null)
+        return entries.entries.map { it.key to it.value }
+    }
+
+    private fun refreshMachinesBar() {
+        machinesContainer.removeAllViews()
+        val selectedBg = ContextCompat.getColorStateList(this, R.color.ctrl_active)
+        val normalBg = ContextCompat.getColorStateList(this, R.color.key_background)
+        val textColor = ContextCompat.getColor(this, R.color.key_text)
+        for ((name, _) in machineBarEntries()) {
+            machinesContainer.addView(Button(this).apply {
+                text = name
+                isAllCaps = false
+                textSize = 12f
+                minWidth = 0
+                minimumWidth = 0
+                setPadding(dp(12), 0, dp(12), 0)
+                backgroundTintList = if (name == selectedMachine) selectedBg else normalBg
+                setTextColor(textColor)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(4) }
+                setOnClickListener { selectMachine(name) }
+            })
+        }
+    }
+
+    /** 选中机器:标签栏只显示该机标签,currentTab 切到该机第一个;没有则空态。 */
+    private fun selectMachine(name: String) {
+        if (selectedMachine == name) return
+        selectedMachine = name
+        refreshMachinesBar()
+        val first = tabs.firstOrNull { it.machineName == name }
+        if (first != null) switchToTab(first) else showEmptyState()
+    }
+
+    /** 当前选中机器可见的标签(标签栏只画这些)。 */
+    private fun visibleTabs(): List<Tab> = tabs.filter { it.machineName == selectedMachine }
+
+    /** 选中机器没有标签时的空态:藏终端区(后台连接不动),提示去点 +。 */
+    private fun showEmptyState() {
+        currentTab = null
+        terminalView.visibility = View.INVISIBLE
+        emptyHint.visibility = View.VISIBLE
+        refreshTabBar()
+        refreshStatus()
+    }
 
     private fun autoSessionName(app: String): String {
         val used = tabs.mapNotNull { it.tmuxSession }.toHashSet()
@@ -331,6 +409,9 @@ class TerminalActivity : AppCompatActivity(),
 
     /** 切换标签：TerminalView 重新 attach；后台标签的连接与 emulator 保持不动。 */
     private fun switchToTab(tab: Tab) {
+        // 从空态恢复:终端区显示回来
+        emptyHint.visibility = View.GONE
+        terminalView.visibility = View.VISIBLE
         if (currentTab === tab) {
             refreshTabBar()
             refreshStatus()
@@ -361,7 +442,6 @@ class TerminalActivity : AppCompatActivity(),
     private fun closeTab(tab: Tab) {
         tab.session?.destroy()
         tab.session = null
-        val idx = tabs.indexOf(tab)
         tabs.remove(tab)
         updateKeepAlive()
         if (tabs.isEmpty()) {
@@ -370,7 +450,9 @@ class TerminalActivity : AppCompatActivity(),
         }
         if (currentTab === tab) {
             currentTab = null
-            switchToTab(tabs[minOf(idx.coerceAtLeast(0), tabs.size - 1)])
+            // 机器栏过滤下:优先切到当前选中机器的第一个可见标签,没有则空态
+            val first = tabs.firstOrNull { it.machineName == selectedMachine }
+            if (first != null) switchToTab(first) else showEmptyState()
         } else {
             refreshTabBar()
         }
@@ -421,9 +503,15 @@ class TerminalActivity : AppCompatActivity(),
         val spinnerAdapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, spinnerNames)
         spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         machineSpinner.adapter = spinnerAdapter
-        // 默认机器若在列表里则预选对应项,免得用户每次重选
-        val defaultIdx = machines.indexOfFirst { it.host == host }
-        if (defaultIdx >= 0) machineSpinner.setSelection(defaultIdx + 1)
+        // 机器下拉默认跟随机器栏当前选中(选中的是默认机器则停在第 0 项"当前机器")
+        val followIdx = machines.indexOfFirst { it.name == selectedMachine }
+        when {
+            followIdx >= 0 -> machineSpinner.setSelection(followIdx + 1)
+            else -> {
+                val hostIdx = machines.indexOfFirst { it.host == host }
+                if (hostIdx >= 0) machineSpinner.setSelection(hostIdx + 1)
+            }
+        }
 
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.dialog_new_tab_title)
@@ -533,14 +621,14 @@ class TerminalActivity : AppCompatActivity(),
         })
     }
 
-    /** 标签栏重绘：当前标签高亮；已断开加 ✕、重连中加 ↻ 前缀。 */
+    /** 标签栏重绘：只画当前选中机器的标签；当前标签高亮；已断开加 ✕、重连中加 ↻ 前缀。 */
     private fun refreshTabBar() {
         tabsContainer.removeAllViews()
         val currentBg = ContextCompat.getColorStateList(this, R.color.ctrl_active)
         val normalBg = ContextCompat.getColorStateList(this, R.color.key_background)
         val normalText = ContextCompat.getColor(this, R.color.key_text)
         val deadText = ContextCompat.getColor(this, R.color.tab_dead_text)
-        for (tab in tabs) {
+        for (tab in visibleTabs()) {
             val button = Button(this).apply {
                 text = when {
                     tab.dead -> "✕ ${tab.label}"
@@ -819,19 +907,60 @@ class TerminalActivity : AppCompatActivity(),
         updateModifierButtons()
     }
 
+    /** IME 动画期间冻结的 TerminalView 高度（-1 = 未冻结）。 */
+    private var frozenTermHeight = -1
+    private var lastContainerHeight = -1
+
+    /** 键盘动画稳定后的一次性对齐动作（每次容器高度变化都会重置计时）。 */
+    private val imeSettleRunnable = Runnable {
+        if (frozenTermHeight >= 0) {
+            frozenTermHeight = -1
+            // 恢复跟随容器:触发一次 onSizeChanged → updateSize → 单次 resize
+            val lp = terminalView.layoutParams
+            lp.height = android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            terminalView.layoutParams = lp
+        }
+    }
+
     /**
-     * 键栏横滑与系统手势冲突修复：把键栏矩形注册为系统手势排除区（API 29+ 的
+     * 弹/收键盘"内容不滚动"修复(备选方案 B,已否决 adjustPan——它把键栏盖在键盘下):
+     * adjustResize 下键盘动画会让容器高度逐帧变化,TerminalView 每帧 updateSize →
+     * 本地 emulator 连续重排 = 用户看到的"内容滚动很多行"。这里在容器高度开始变化时
+     * 把 TerminalView 钉死为当前像素高度(底部被键盘盖住,内容原地不动),动画稳定
+     * 250ms 后一次性恢复 MATCH_PARENT —— 整个弹/收过程只触发一次 resize/重排。
+     */
+    private fun setupImeResizeFreeze() {
+        val container = findViewById<android.widget.FrameLayout>(R.id.terminal_container)
+        container.viewTreeObserver.addOnGlobalLayoutListener {
+            val h = container.height
+            if (h == lastContainerHeight || h <= 0) return@addOnGlobalLayoutListener
+            lastContainerHeight = h
+            if (frozenTermHeight < 0 && terminalView.height > 0 && terminalView.height != h) {
+                // 动画开始:钉住当前高度,TerminalView 不再随容器收缩 → 不触发 updateSize
+                frozenTermHeight = terminalView.height
+                val lp = terminalView.layoutParams
+                lp.height = frozenTermHeight
+                terminalView.layoutParams = lp
+            }
+            container.removeCallbacks(imeSettleRunnable)
+            container.postDelayed(imeSettleRunnable, 250)
+        }
+    }
+
+    /**
+     * 键栏横滑与系统手势冲突修复：把键栏注册为系统手势排除区（API 29+ 的
      * setSystemGestureExclusionRects，标准做法），否则在键栏上横向滑动翻键时
-     * 经常被系统手势导航抢成"切换应用/返回"。键盘弹收、旋转会改变键栏位置，
-     * 排除矩形随之失效，所以在 OnLayoutChange 里每次布局后重设。
+     * 经常被系统手势导航抢成"切换应用/返回"。
+     * 注意：排除矩形必须是 **view 本地坐标** (0,0,w,h)——v1.3.4 误用了
+     * getGlobalVisibleRect 的屏幕坐标,真机手势导航下不生效;键盘弹收、旋转
+     * 会改变键栏尺寸,故在 OnLayoutChange 里每次重设。
+     * 另在布局里给键栏加了 8dp 底部 margin,离开屏幕底缘手势热区一点,双保险。
      */
     private fun setupKeybarGestureExclusion() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return // API 29 以下无此 API，空实现
         val keybar = findViewById<HorizontalScrollView>(R.id.keybar_scroll)
         keybar.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-            val rect = Rect()
-            v.getGlobalVisibleRect(rect)
-            v.systemGestureExclusionRects = listOf(rect)
+            v.systemGestureExclusionRects = listOf(Rect(0, 0, v.width, v.height))
         }
     }
 
@@ -862,7 +991,7 @@ class TerminalActivity : AppCompatActivity(),
         currentTab?.session?.sendUserInput(code)
     }
 
-    /** 三个粘滞修饰键统一点亮/熄灭（点亮 = ctrl_active 底色）。 */
+    /** CTRL/SHIFT/ALT 粘滞修饰键统一点亮/熄灭（点亮 = ctrl_active 底色）。 */
     private fun updateModifierButtons() {
         val active = ContextCompat.getColorStateList(this, R.color.ctrl_active)
         val normal = ContextCompat.getColorStateList(this, R.color.key_background)
@@ -902,6 +1031,68 @@ class TerminalActivity : AppCompatActivity(),
     }
 
     // ---------- TerminalViewClient ----------
+
+    // 单击按下点记录(dispatchTouchEvent 里"光标行点按定位"用)
+    private var tapDownX = 0f
+    private var tapDownY = 0f
+    private var tapDownTime = 0L
+
+    /**
+     * 触摸分发层拦截"TUI 输入框内的点按定位"。为什么必须在这里而不是 onSingleTapUp:
+     * Termux 在 GestureAndScaleRecognizer.onUp(ACTION_UP 时)就把单击翻译成鼠标点击
+     * 转发了,等到 onSingleTapConfirmed 回调客户端时点击早已发出,拦不住。
+     * 这里在 ACTION_UP 分发给 TerminalView 之前判断:命中"光标行点按"就消费掉
+     * (Termux 的 onUp 收不到 → 不会转发鼠标事件),改发方向键挪光标。
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                tapDownX = ev.x
+                tapDownY = ev.y
+                tapDownTime = ev.eventTime
+            }
+            MotionEvent.ACTION_UP -> {
+                if (tryCursorRowTap(ev)) return true
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    /**
+     * kimi/claude 标签输入框点按定位光标:kimi 不吃鼠标点击,点按位置与光标
+     * 同行不同列时,发 ←/→ 方向键(次数=列差)把光标挪到点按处;同行同列或其他行
+     * 不拦截(其他行照旧走 Termux 的鼠标转发=TUI 点选)。返回 true=已消费该 UP。
+     */
+    private fun tryCursorRowTap(up: MotionEvent): Boolean {
+        val tab = currentTab ?: return false
+        if (tab.app !in TUI_APPS) return false
+        val emulator = terminalView.mEmulator ?: return false
+        if (!emulator.isMouseTrackingActive) return false // 无 mouse tracking 时单击本就不转发
+        // 必须是干净单击:位移小于 touch slop、按下时间短(否则是滚动/长按选择)
+        val slop = ViewConfiguration.get(this).scaledTouchSlop
+        if (abs(up.x - tapDownX) > slop || abs(up.y - tapDownY) > slop) return false
+        if (up.eventTime - tapDownTime > CURSOR_TAP_MAX_MS) return false
+        // 点按须落在 TerminalView 内(可能在键栏/标签栏上)
+        val loc = IntArray(2)
+        terminalView.getLocationOnScreen(loc)
+        val viewY = up.rawY - loc[1]
+        if (viewY < 0 || viewY > terminalView.height || emulator.mRows <= 0) return false
+        val lineSpacing = terminalView.height / emulator.mRows
+        if (lineSpacing <= 0) return false
+        val row = (viewY / lineSpacing).toInt() + topRowOffset()
+        if (row != emulator.cursorRow) return false
+        val colWidth = terminalView.width.toFloat() / emulator.mColumns
+        if (colWidth <= 0) return false
+        val col = (up.x / colWidth).toInt()
+        val delta = col - emulator.cursorCol
+        if (delta == 0) return false // 正点在光标上:放行维持原行为
+        val key = if (delta < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+        repeat(minOf(abs(delta), 100)) { sendArrowKey(key) }
+        // 点输入框就是要打字:弹键盘,与其他单击行为一致
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.showSoftInput(terminalView, InputMethodManager.SHOW_IMPLICIT)
+        return true
+    }
 
     override fun onScale(scale: Float): Float {
         // TerminalView 传入的是累计缩放因子；返回修正后的因子。字号按标签各自记住。
@@ -997,8 +1188,8 @@ class TerminalActivity : AppCompatActivity(),
         if (stickyAlt) {
             stickyAlt = false
             updateModifierButtons()
-            // Meta = ESC 前缀（readline 的 M-b/M-f/M-d 等）
-            currentTab?.session?.sendUserInput("\u001B" + String(Character.toChars(codePoint)))
+            // Meta = ESC 前缀(readline 的 M-b/M-f/M-d 等);用 0x1B 避免源码里藏不可见控制字符
+            currentTab?.session?.sendUserInput(0x1B.toChar().toString() + String(Character.toChars(codePoint)))
             return true
         }
         if (stickyCtrl) {

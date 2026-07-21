@@ -17,7 +17,7 @@ APK 文件名带版本号:`awesome-me-<versionName>.apk`(如 awesome-me-1.3.3.ap
   asset 名 `awesome-me-<version>.apk`。手机浏览器打开 release 页下载安装(允许未知来源),
   覆盖安装即可升级。
 - **备用渠道 1(duckdns)**:https://nio-cva.duckdns.org/dl/remote-terminal/app-debug.apk
-  (HTTP Basic 认证,用户名/密码凭证私下分发,不在本仓库公开)——永远是"最新构建"覆盖同一路径,无版本区分,仅应急。
+  (HTTP Basic 认证,用户名/密码凭证私下分发,不在本仓库公开),永远是"最新构建"覆盖同一路径,无版本区分,仅应急。
 - **备用渠道 2(Linode)**:`/opt/downloads/remote-terminal/app-debug.apk`,scp 手动同步。
 
 发布动作只做两件事:`gh release create` 传 asset +(可选)scp 到 Linode;

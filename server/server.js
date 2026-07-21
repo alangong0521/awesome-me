@@ -55,6 +55,11 @@ function ptyEnv() {
   env.PATH = extra.join(':') + ':' + (env.PATH || '');
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
+  // 标记"这是 awesome me 终端 App 的会话":用户 shell 配置可据此做终端友好化
+  // (如 ~/.bashrc 里 [ -n "$RT_TERMINAL" ] && alias gvim='gvim -v' 让 gvim 走终端模式)。
+  // 注意:tmux 不会把客户端环境带进新会话(实测 update-environment 只放行固定列表),
+  // 所以 tmux 包装路径下还要在 new-session 命令里内联(见下方 connection 处理)。
+  env.RT_TERMINAL = '1';
   if (!env.LANG) env.LANG = 'en_US.UTF-8';
   return env;
 }
@@ -160,13 +165,14 @@ wss.on('connection', (ws) => {
   let argv = config.apps[ws._appName].slice();
   const tmuxBin = (config.apps.tmux && config.apps.tmux[0]) || 'tmux';
   if (ws._appName === 'tmux') {
-    argv = argv.concat(['new-session', '-A', '-s', ws._tmuxSession]);
+    // 内联 RT_TERMINAL=1:tmux 不透传客户端环境(实测),只能在会话创建命令里带进去
+    argv = argv.concat(['new-session', '-A', '-s', ws._tmuxSession, 'RT_TERMINAL=1 bash -l']);
   } else if (ws._sessionGiven) {
     // 客户端给了会话名:把应用包进 tmux 命名会话(new-session -A -s <名> <命令>),
     // 会话已存在则忽略命令直接接入——本机 tmux attach -t <名> 可同屏接力,
     // 手机断开后进程在 tmux 里继续存活。
     const cmd = argv.map(a => `'${String(a).replace(/'/g, `'\\''`)}'`).join(' ');
-    argv = [tmuxBin, 'new-session', '-A', '-s', ws._tmuxSession, cmd];
+    argv = [tmuxBin, 'new-session', '-A', '-s', ws._tmuxSession, `RT_TERMINAL=1 ${cmd}`];
   }
   // 该连接是否落在 tmux 会话里(决定"鼠标上报"和"resize 后强制重绘"两个 tmux 专属增强)
   const inTmux = ws._appName === 'tmux' || ws._sessionGiven;

@@ -72,6 +72,7 @@
     <!-- 新建标签对话框：接入已有会话 -->
     <string name="label_machine">选择机器</string>
     <string name="machine_current">当前机器（%1$s）</string>
+    <string name="empty_machine_hint">该机器暂无标签\n点右上角 + 新建一个</string>
     <string name="label_existing_sessions">接入已有会话（tmux）</string>
     <string name="sessions_loading">加载中…</string>
     <string name="sessions_none">无可用会话</string>

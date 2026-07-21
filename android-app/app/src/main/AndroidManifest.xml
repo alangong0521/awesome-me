@@ -33,6 +33,10 @@
         <!-- singleTask：重复"连接"/重复 am start 时复用同一实例(走 onNewIntent 重新
              初始化),避免堆叠多个 TerminalActivity——实测堆叠会让对话框/IME 焦点
              路由错乱(对话框里的输入框点不出键盘) -->
+        <!-- adjustResize + 代码侧"动画期间冻结终端尺寸"(见 TerminalActivity.setupImeResizeFreeze):
+             键盘动画过程中 TerminalView 保持原高不随容器收缩(底部被键盘盖住),
+             动画结束一次性对齐 = 只重排一次,而不是随动画帧连续滚动;
+             同时键栏始终在键盘上方可用(adjustPan 会把键栏盖在键盘下,已否决) -->
         <activity
             android:name=".TerminalActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard"
