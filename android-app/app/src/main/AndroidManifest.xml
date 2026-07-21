@@ -30,10 +30,14 @@
         </activity>
 
         <!-- configChanges：旋转/键盘弹出等不重建 Activity，避免 WebSocket 断线 -->
+        <!-- singleTask：重复"连接"/重复 am start 时复用同一实例(走 onNewIntent 重新
+             初始化),避免堆叠多个 TerminalActivity——实测堆叠会让对话框/IME 焦点
+             路由错乱(对话框里的输入框点不出键盘) -->
         <activity
             android:name=".TerminalActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard"
             android:exported="false"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize" />
 
         <!-- 后台保活前台服务：TerminalActivity 有活跃标签期间常驻 -->

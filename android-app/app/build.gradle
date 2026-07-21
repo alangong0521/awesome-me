@@ -11,8 +11,16 @@ android {
         applicationId 'com.calla.remoteterminal'
         minSdk 24
         targetSdk 34
-        versionCode 6
-        versionName '1.3.2'
+        versionCode 8
+        versionName '1.3.4'
+    }
+
+    // APK 产物直接带版本号命名(awesome-me-<versionName>.apk),不靠手工改名,
+    // 从文件名即可判断版本
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "awesome-me-${variant.versionName}.apk"
+        }
     }
 
     // BuildConfig.VERSION_NAME 供界面显示版本号(AGP 8 默认不生成 BuildConfig,需显式开启)

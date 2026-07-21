@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -24,6 +25,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.RadioGroup
 import android.widget.Scroller
@@ -93,6 +95,9 @@ class TerminalActivity : AppCompatActivity(),
 
         /** 文件推送去重窗口：同一 name|size 在该窗口内（多标签同时收到同一广播）只提示一次。 */
         private const val PUSH_DEDUPE_WINDOW_MS = 10_000L
+
+        /** 远端不消费鼠标点击的程序：mouse tracking 下单击仍弹软键盘（TUI 标签则把点击发给被控端）。 */
+        private val PLAIN_SHELL_APPS = setOf("shell", "tmux")
     }
 
     /** 一个标签。session 的生命周期由 Activity 管理（重连时会整个替换）。 */
@@ -131,10 +136,14 @@ class TerminalActivity : AppCompatActivity(),
     private var nextTabId = 1
 
     private var stickyCtrl = false
+    private var stickyShift = false
+    private var stickyAlt = false
     private var baseFontPx = 0
     private var termTitle: String? = null
     private var endDialogShowing = false
     private lateinit var orientationButton: Button
+    private lateinit var shiftButton: Button
+    private lateinit var altButton: Button
 
     /** 拉取服务端活 tmux 会话列表用（新建标签对话框的"接入已有会话"）。 */
     private val httpClient = OkHttpClient.Builder()
@@ -179,6 +188,7 @@ class TerminalActivity : AppCompatActivity(),
         terminalView.isFocusableInTouchMode = true
 
         setupExtraKeys()
+        setupKeybarGestureExclusion()
         findViewById<Button>(R.id.btn_add_tab).setOnClickListener { showNewTabDialog() }
 
         // terminal-emulator 的 JNI 库（libtermux.so）必须随 AAR 打进 APK；第一次
@@ -215,6 +225,31 @@ class TerminalActivity : AppCompatActivity(),
     override fun onResume() {
         super.onResume()
         inForeground = true
+    }
+
+    /**
+     * singleTask 下重复"连接"（SetupActivity 再次 startActivity）/重复 am start 会走到这里。
+     * 按新参数重建连接层：销毁全部旧标签会话，以新 host/token/app 重开初始标签。
+     * 为什么必须重建而不是复用：extras 可能指向另一台机器/另一个 token，复用旧会话就是错的。
+     * 视图层在 onCreate 已初始化，这里只重置连接层。
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val newHost = intent.getStringExtra(EXTRA_HOST).orEmpty()
+        val newToken = intent.getStringExtra(EXTRA_TOKEN).orEmpty()
+        if (newHost.isEmpty() || newToken.isEmpty()) return // 没带参数：仅把已有实例带回前台
+        for (tab in tabs) {
+            tab.session?.destroy()
+            tab.session = null
+        }
+        tabs.clear()
+        currentTab = null
+        host = newHost
+        port = intent.getStringExtra(EXTRA_PORT)?.toIntOrNull() ?: 7681
+        token = newToken
+        val app = intent.getStringExtra(EXTRA_APP).orEmpty().ifEmpty { "shell" }
+        val session = intent.getStringExtra(EXTRA_SESSION)
+        openTab(app, session)
     }
 
     override fun onPause() {
@@ -678,27 +713,59 @@ class TerminalActivity : AppCompatActivity(),
     // ---------- 特殊键栏 ----------
 
     private fun setupExtraKeys() {
-        findViewById<Button>(R.id.key_esc).setOnClickListener {
-            currentTab?.session?.sendUserInput(byteArrayOf(0x1B))
-        }
-        findViewById<Button>(R.id.key_tab).setOnClickListener {
-            currentTab?.session?.sendUserInput(byteArrayOf(0x09))
-        }
         findViewById<Button>(R.id.key_enter).setOnClickListener {
             currentTab?.session?.sendUserInput(byteArrayOf(0x0D))
         }
-        findViewById<Button>(R.id.key_left).setOnClickListener { sendArrowKey(KeyEvent.KEYCODE_DPAD_LEFT) }
+        findViewById<Button>(R.id.key_esc).setOnClickListener {
+            currentTab?.session?.sendUserInput(byteArrayOf(0x1B))
+        }
         findViewById<Button>(R.id.key_up).setOnClickListener { sendArrowKey(KeyEvent.KEYCODE_DPAD_UP) }
         findViewById<Button>(R.id.key_down).setOnClickListener { sendArrowKey(KeyEvent.KEYCODE_DPAD_DOWN) }
+        // 退格 = 0x7F(DEL),与多数终端/backspace 约定一致
+        findViewById<Button>(R.id.key_backspace).setOnClickListener {
+            currentTab?.session?.sendUserInput(byteArrayOf(0x7F))
+        }
+        findViewById<Button>(R.id.key_left).setOnClickListener { sendArrowKey(KeyEvent.KEYCODE_DPAD_LEFT) }
         findViewById<Button>(R.id.key_right).setOnClickListener { sendArrowKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
+        findViewById<Button>(R.id.key_tab).setOnClickListener {
+            currentTab?.session?.sendUserInput(byteArrayOf(0x09))
+        }
+        // CTRL/SHIFT/ALT 三个"粘滞"修饰键:点一下点亮,下一个字符带修饰;再点取消。
+        // CTRL 走 Termux 默认控制字符映射(readControlKey);SHIFT/ALT 在 onCodePoint 手工实现。
         ctrlButton.setOnClickListener {
             stickyCtrl = !stickyCtrl
-            updateCtrlButton()
+            updateModifierButtons()
+        }
+        shiftButton = findViewById(R.id.key_shift)
+        shiftButton.setOnClickListener {
+            stickyShift = !stickyShift
+            updateModifierButtons()
+        }
+        altButton = findViewById(R.id.key_alt)
+        altButton.setOnClickListener {
+            stickyAlt = !stickyAlt
+            updateModifierButtons()
         }
         findViewById<Button>(R.id.key_keyboard).setOnClickListener { toggleSoftKeyboard() }
         orientationButton = findViewById(R.id.key_orientation)
         orientationButton.setOnClickListener { toggleOrientation() }
-        updateCtrlButton()
+        updateModifierButtons()
+    }
+
+    /**
+     * 键栏横滑与系统手势冲突修复：把键栏矩形注册为系统手势排除区（API 29+ 的
+     * setSystemGestureExclusionRects，标准做法），否则在键栏上横向滑动翻键时
+     * 经常被系统手势导航抢成"切换应用/返回"。键盘弹收、旋转会改变键栏位置，
+     * 排除矩形随之失效，所以在 OnLayoutChange 里每次布局后重设。
+     */
+    private fun setupKeybarGestureExclusion() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return // API 29 以下无此 API，空实现
+        val keybar = findViewById<HorizontalScrollView>(R.id.keybar_scroll)
+        keybar.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            val rect = Rect()
+            v.getGlobalVisibleRect(rect)
+            v.systemGestureExclusionRects = listOf(rect)
+        }
     }
 
     /**
@@ -728,10 +795,13 @@ class TerminalActivity : AppCompatActivity(),
         currentTab?.session?.sendUserInput(code)
     }
 
-    private fun updateCtrlButton() {
-        ctrlButton.backgroundTintList = ContextCompat.getColorStateList(
-            this, if (stickyCtrl) R.color.ctrl_active else R.color.key_background
-        )
+    /** 三个粘滞修饰键统一点亮/熄灭（点亮 = ctrl_active 底色）。 */
+    private fun updateModifierButtons() {
+        val active = ContextCompat.getColorStateList(this, R.color.ctrl_active)
+        val normal = ContextCompat.getColorStateList(this, R.color.key_background)
+        ctrlButton.backgroundTintList = if (stickyCtrl) active else normal
+        shiftButton.backgroundTintList = if (stickyShift) active else normal
+        altButton.backgroundTintList = if (stickyAlt) active else normal
     }
 
     private fun toggleSoftKeyboard() {
@@ -785,10 +855,12 @@ class TerminalActivity : AppCompatActivity(),
         // 只用来终止 fling，不做任何翻译。（正常的滑动不会走到这里：GestureDetector
         // 只有位移始终小于 touch slop 才回调 onSingleTapConfirmed。）
         if (abortFlingIfRunning()) return
-        // 与鼠标上报的冲突处理:mouse tracking 开启(被控端 DECSET 1000/1002)时,
-        // 单击已在 TerminalView 的手势层作为鼠标事件发给被控端,这里不再介入。
+        // 与鼠标上报的冲突处理:mouse tracking 开启(tmux 会话已 mouse on)时,
+        // 单击已在 TerminalView 的手势层作为鼠标事件发给被控端。
+        // 但 shell/tmux 标签里远端不消费点击(顶多选中 pane),单击应照旧弹键盘;
+        // kimi/claude 等 TUI 标签点击可能是在操作界面,保持转发、不弹键盘(用底栏"键盘"键)。
         val emulator = terminalView.mEmulator
-        if (emulator?.isMouseTrackingActive == true) return
+        if (emulator?.isMouseTrackingActive == true && currentTab?.app !in PLAIN_SHELL_APPS) return
         // 注:曾经的"TUI 点选翻译"(点按某行 = 连发 ↑/↓ 把选择挪过去)已彻底移除——
         // 全量 tmux 化后备用缓冲区常开,行距换算稍有偏差就把单击误译成几十次方向键
         // (弹不出键盘、界面乱滚),且功能与底栏 ⏎←↑↓→ 重复。TUI 菜单导航请用底栏方向键。
@@ -840,17 +912,37 @@ class TerminalActivity : AppCompatActivity(),
     /** 粘滞 CTRL：TerminalView 默认控制字符映射（c→0x03、d→0x04、[→0x1B 等）读取此状态。 */
     override fun readControlKey(): Boolean = stickyCtrl
 
-    override fun readAltKey(): Boolean = false
+    /** 粘滞 ALT/SHIFT：同时回报给 Termux 的硬件按键路径（IME 字符由 onCodePoint 手工处理）。 */
+    override fun readAltKey(): Boolean = stickyAlt
 
-    override fun readShiftKey(): Boolean = false
+    override fun readShiftKey(): Boolean = stickyShift
 
     override fun readFnKey(): Boolean = false
 
     override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession): Boolean {
-        // 每个文本码点发送前都会经过这里；按约定 CTRL 在下一个字符发出后自动取消
+        // 每个文本码点发送前都会经过这里；粘滞修饰键在下一个字符发出后自动取消。
+        // SHIFT/ALT 对 IME 字符 Termux 不会自动处理（readShiftKey/readAltKey 只在硬件
+        // 按键路径被查询），所以在发送前手工实现：
+        if (stickyShift) {
+            stickyShift = false
+            updateModifierButtons()
+            val upper = Character.toUpperCase(codePoint)
+            if (upper != codePoint) {
+                // 字母 → 直接发大写（Shift 的最小有用语义）；非字母按原样发
+                currentTab?.session?.sendUserInput(String(Character.toChars(upper)))
+                return true
+            }
+        }
+        if (stickyAlt) {
+            stickyAlt = false
+            updateModifierButtons()
+            // Meta = ESC 前缀（readline 的 M-b/M-f/M-d 等）
+            currentTab?.session?.sendUserInput("\u001B" + String(Character.toChars(codePoint)))
+            return true
+        }
         if (stickyCtrl) {
             stickyCtrl = false
-            updateCtrlButton()
+            updateModifierButtons()
         }
         return false // 交回 TerminalView 默认逻辑（含 ctrl 控制字符映射）处理
     }

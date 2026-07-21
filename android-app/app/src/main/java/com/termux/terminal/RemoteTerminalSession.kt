@@ -109,9 +109,11 @@ class RemoteTerminalSession(
     }
 
     /**
-     * resize 去抖（300ms）：软键盘弹起/收起动画、IME 候选栏高度变化会让行数快速抖动，
+     * resize 去抖（500ms）：软键盘弹起/收起动画、IME 候选栏高度变化会让行数快速抖动，
      * 每次抖动都发 resize 会让 tmux 反复重排重绘整个 pane（实测 kimi 界面以多种尺寸
-     * 叠印）。尺寸变化后 300ms 内无更新才发；期间有新变化则重置计时。
+     * 叠印 = "裂屏"）。尺寸变化后 500ms 内无更新才发（覆盖 IME 动画全程），期间有新
+     * 变化则重置计时——动画期间所有中间尺寸合并为最后一次。服务端另有配合：尺寸
+     * 稳定后对 tmux 会话执行 refresh-client 强制全量重绘，清掉残留残影。
      */
     private val resizeDebounceRunnable = Runnable {
         if (open && !destroyed.get()) {
@@ -207,7 +209,7 @@ class RemoteTerminalSession(
     /**
      * 终端尺寸变化时调用（TerminalActivity 在 onEmulatorSet 回调里转发）。
      * 连接建立时的首次尺寸走 connect() 的 URL query（不防抖）；连接后的变化走
-     * resize 控制帧，300ms 去抖（见 resizeDebounceRunnable 注释）。
+     * resize 控制帧，500ms 去抖（见 resizeDebounceRunnable 注释）。
      */
     fun sendResize(cols: Int, rows: Int) {
         if (cols == lastCols && rows == lastRows) return
@@ -215,7 +217,7 @@ class RemoteTerminalSession(
         lastRows = rows
         if (!open) return // 未连接不发；重连时最新尺寸由 doConnect 的 URL query 携带
         mainHandler.removeCallbacks(resizeDebounceRunnable)
-        mainHandler.postDelayed(resizeDebounceRunnable, 300)
+        mainHandler.postDelayed(resizeDebounceRunnable, 500)
     }
 
     /** 特殊键栏注入输入；与键盘输入走完全相同的通道（write → 输入队列 → 抽干线程 → ws）。 */

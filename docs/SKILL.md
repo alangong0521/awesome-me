@@ -8,12 +8,18 @@ disable-model-invocation: true
 
 一套自建远程终端:服务端 = WebSocket-PTY(node-pty + ws),客户端 = 安卓 App 或 PC 端 `rt-client.js`,组网 = Tailscale。
 
-## APK 公网下载(手机装这个)
+## APK 下载与发布(手机装这个)
 
-- 链接: **https://nio-cva.duckdns.org/dl/remote-terminal/app-debug.apk**
-- 密码: HTTP Basic 认证(浏览器会弹框),用户名/密码凭证私下分发,不在本仓库公开
+APK 文件名带版本号:`awesome-me-<versionName>.apk`(如 awesome-me-1.3.4.apk),
+构建时由 app/build.gradle 的 applicationVariants 直接产出,不靠手工改名。
 
-手机浏览器打开链接 → 输用户名+密码 → 下载 → 安装(允许未知来源)。覆盖安装即可升级。
+- **主渠道 = GitHub Release**:本仓库 [Releases](https://github.com/alangong0521/awesome-me/releases) 页,
+  asset 名 `awesome-me-<version>.apk`。手机浏览器下载安装(允许未知来源),覆盖安装即可升级。
+- **备用渠道 1(duckdns 固定链接)**:https://nio-cva.duckdns.org/dl/remote-terminal/app-debug.apk
+  (HTTP Basic 认证,用户名/密码凭证私下分发,不在本仓库公开)——永远指向最新构建,无版本区分,仅应急。
+- **备用渠道 2(Linode)**:scp 手动同步到下载目录,同样仅应急。
+
+发布动作只做两件事:`gh release create` 传 asset +(可选)scp 到 Linode;marketplace 副本等历史渠道不再维护。
 
 ## 四场景速查
 

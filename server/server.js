@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const pty = require('node-pty');
+const { execFile } = require('child_process');
 const { WebSocketServer } = require('ws');
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
@@ -121,6 +122,7 @@ fs.mkdirSync(PUSH_DIR, { recursive: true });
 }
 
 const wss = new WebSocketServer({ noServer: true });
+let connSeq = 0;
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://localhost');
@@ -151,17 +153,23 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 wss.on('connection', (ws) => {
+  // 排障:每连接一个序号,输入帧逐条进日志(用户手机打字重复问题的取证手段,稳定后可移除)
+  ws._connId = ++connSeq;
+  console.log(`[${new Date().toISOString()}] conn#${ws._connId} open app=${ws._appName} session=${ws._tmuxSession}`);
+  ws.on('close', (code) => console.log(`[${new Date().toISOString()}] conn#${ws._connId} close code=${code}`));
   let argv = config.apps[ws._appName].slice();
+  const tmuxBin = (config.apps.tmux && config.apps.tmux[0]) || 'tmux';
   if (ws._appName === 'tmux') {
     argv = argv.concat(['new-session', '-A', '-s', ws._tmuxSession]);
   } else if (ws._sessionGiven) {
     // 客户端给了会话名:把应用包进 tmux 命名会话(new-session -A -s <名> <命令>),
     // 会话已存在则忽略命令直接接入——本机 tmux attach -t <名> 可同屏接力,
     // 手机断开后进程在 tmux 里继续存活。
-    const tmuxBin = (config.apps.tmux && config.apps.tmux[0]) || 'tmux';
     const cmd = argv.map(a => `'${String(a).replace(/'/g, `'\\''`)}'`).join(' ');
     argv = [tmuxBin, 'new-session', '-A', '-s', ws._tmuxSession, cmd];
   }
+  // 该连接是否落在 tmux 会话里(决定"鼠标上报"和"resize 后强制重绘"两个 tmux 专属增强)
+  const inTmux = ws._appName === 'tmux' || ws._sessionGiven;
   const file = argv[0];
   const args = argv.slice(1);
   console.log(`[${new Date().toISOString()}] spawn ${ws._appName}: ${file} ${args.join(' ')}`);
@@ -182,10 +190,20 @@ wss.on('connection', (ws) => {
     return;
   }
 
+  // 手机滑动滚屏:tmux 会话开鼠标上报(mouse on → tmux 向终端发 DECSET 1002+SGR 1006,
+  // Termux 端滚动手势随之翻译成 SGR 滚轮事件 → tmux 进 copy-mode 滚屏)。
+  // 延迟 800ms 等 tmux 把会话建出来(避免 set-option 赶在 new-session 前执行而静默失败)。
+  // 已知副作用:server 本机 desktop attach 同一会话时,滚轮也进 copy-mode 而非终端自带
+  // scrollback——可接受(手机滚屏是刚需),在此注明。
+  if (inTmux) {
+    setTimeout(() => {
+      execFile(tmuxBin, ['set-option', '-t', ws._tmuxSession, 'mouse', 'on'], () => {});
+    }, 800);
+  }
+
   term.onData((data) => {
     if (ws.readyState === ws.OPEN) ws.send(Buffer.from(data, 'utf8'));
-  });
-  term.onExit(({ exitCode, signal }) => {
+  });  term.onExit(({ exitCode, signal }) => {
     console.log(`[${new Date().toISOString()}] ${ws._appName} exited code=${exitCode} signal=${signal}`);
     if (ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify({ type: 'exit', code: exitCode }));
@@ -195,13 +213,31 @@ wss.on('connection', (ws) => {
 
   ws.on('message', (msg, isBinary) => {
     if (isBinary) {
-      term.write(msg.toString('utf8'));
+      const s = msg.toString('utf8');
+      console.log(`[${new Date().toISOString()}] conn#${ws._connId} in ${msg.length}B ${JSON.stringify(s.slice(0, 120))}`);
+      term.write(s);
       return;
     }
     try {
       const ctrl = JSON.parse(msg.toString('utf8'));
       if (ctrl.type === 'resize' && ctrl.cols > 0 && ctrl.rows > 0) {
         term.resize(Math.min(ctrl.cols, 500), Math.min(ctrl.rows, 200));
+        if (inTmux) {
+          // 裂屏修复:软键盘弹起/收起动画期间尺寸抖动,tmux 按中间尺寸反复重排会在
+          // pane 里留下残影(多段输入框/多条状态栏叠印)。尺寸稳定 500ms 后强制 tmux
+          // 全量重绘清残影。注意 refresh-client 的 -t 要的是客户端(tty)而非会话名
+          // (实测 -t <会话名> 报 can't find client),先 list-clients 再逐个刷新。
+          clearTimeout(ws._refreshTimer);
+          ws._refreshTimer = setTimeout(() => {
+            execFile(tmuxBin, ['list-clients', '-t', ws._tmuxSession, '-F', '#{client_name}'],
+              (err, stdout) => {
+                if (err) return;
+                for (const c of stdout.trim().split('\n').filter(Boolean)) {
+                  execFile(tmuxBin, ['refresh-client', '-t', c], () => {});
+                }
+              });
+          }, 500);
+        }
       }
     } catch (_) { /* ignore malformed control frames */ }
   });
