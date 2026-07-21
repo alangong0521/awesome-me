@@ -157,8 +157,8 @@ class SetupActivity : AppCompatActivity() {
         val raw = prefs.getString(KEY_MACHINES, null)
         if (raw == null) {
             // 首次:预置两台常用机器,token 留空,连接一次后自动回填
-            machines += Machine("公司服务器", "100.101.50.124", DEFAULT_PORT, "")
-            machines += Machine("家里电脑", "100.91.6.109", DEFAULT_PORT, "")
+            machines += Machine("公司服务器", "CHANGE_ME_SERVER_TAILNET_IP", DEFAULT_PORT, "")
+            machines += Machine("家里电脑", "CHANGE_ME_MAC_TAILNET_IP", DEFAULT_PORT, "")
             saveMachines()
             return
         }

@@ -19,10 +19,10 @@ disable-model-invocation: true
 
 | 场景 | 客户端 | 目标 host | token |
 |---|---|---|---|
-| 手机→server(公司) | 安卓 App | `100.101.50.124:7681` | `change-me` |
-| 手机→家 Mac | 安卓 App | `100.91.6.109:7681` | Mac 上 `~/remote-terminal/server/config.json` |
-| server→家 Mac | `rt-client.js` | `100.91.6.109` | 同上 Mac 的 token |
-| 家 Mac→server | `rt-client.js` | `100.101.50.124` | `change-me` |
+| 手机→server(公司) | 安卓 App | `<server的Tailscale-IP>:7681` | `change-me` |
+| 手机→家 Mac | 安卓 App | `<家Mac的Tailscale-IP>:7681` | Mac 上 `~/remote-terminal/server/config.json` |
+| server→家 Mac | `rt-client.js` | `<家Mac的Tailscale-IP>` | 同上 Mac 的 token |
+| 家 Mac→server | `rt-client.js` | `<server的Tailscale-IP>` | `change-me` |
 
 PC 客户端用法(依赖 `npm i ws`):
 

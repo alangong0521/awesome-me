@@ -7,28 +7,28 @@ tailnet 全组网后,四个场景共用一套:服务端 = remote-terminal server
 
 | 节点 | tailnet IP | 服务端 | token |
 |---|---|---|---|
-| server(公司 Linux) | `100.101.50.124` | systemd user `remote-terminal` ✅ | `change-me` |
-| 家 Mac(my-macbook) | `100.91.6.109` | launchd `com.calla.remote-terminal` ✅(原方案已装) | 见 Mac 上 `~/remote-terminal/server/config.json` |
+| server(公司 Linux) | `<server的Tailscale-IP>` | systemd user `remote-terminal` ✅ | `change-me` |
+| 家 Mac(my-macbook) | `<家Mac的Tailscale-IP>` | launchd `com.calla.remote-terminal` ✅(原方案已装) | 见 Mac 上 `~/remote-terminal/server/config.json` |
 | 手机(my-phone) | Tailscale App 在线即可 | — (纯客户端) | — |
 
 前置:两端 Tailscale 在线(`tailscale status`);Mac 不能睡眠(原方案 §5)。
 
 ## 场景 1:手机 → server ✅(已通)
 
-App 填:主机 `100.101.50.124` / 端口 `7681` / token `change-me`。
+App 填:主机 `<server的Tailscale-IP>` / 端口 `7681` / token `change-me`。
 
 ## 场景 2:手机 → 家 Mac(原方案,已具备)
 
-App 填:主机 `100.91.6.109` / 端口 `7681` / token = Mac 的 config.json 里那个。
+App 填:主机 `<家Mac的Tailscale-IP>` / 端口 `7681` / token = Mac 的 config.json 里那个。
 App 里「主机」字段换 IP 即可在两个服务端之间切换。
 
 ## 场景 3:server → 家 Mac
 
 ```bash
 # server 上(client 已在 ~/remote-terminal/client/)
-RT_TOKEN=<Mac的token> node ~/remote-terminal/client/rt-client.js 100.91.6.109 -a shell
+RT_TOKEN=<Mac的token> node ~/remote-terminal/client/rt-client.js <家Mac的Tailscale-IP> -a shell
 # 或直接进 Mac 的 tmux 持久会话:
-RT_TOKEN=<Mac的token> node ~/remote-terminal/client/rt-client.js 100.91.6.109 -a tmux -s mac-work
+RT_TOKEN=<Mac的token> node ~/remote-terminal/client/rt-client.js <家Mac的Tailscale-IP> -a tmux -s mac-work
 ```
 
 ## 场景 4:家 Mac → server
@@ -39,7 +39,7 @@ mkdir -p ~/remote-terminal/client && cd ~/remote-terminal/client
 # (从本仓库拷 client/rt-client.js 过来,或 server 上 scp 反向推)
 npm install ws
 # 之后每次:
-RT_TOKEN=change-me node rt-client.js 100.101.50.124 -a shell
+RT_TOKEN=change-me node rt-client.js <server的Tailscale-IP> -a shell
 ```
 
 ## 双端同屏(手机↔本机无缝切入)✅ 已验证
