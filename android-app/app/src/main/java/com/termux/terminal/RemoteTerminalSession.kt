@@ -108,6 +108,22 @@ class RemoteTerminalSession(
         }
     }
 
+    /**
+     * resize 去抖（300ms）：软键盘弹起/收起动画、IME 候选栏高度变化会让行数快速抖动，
+     * 每次抖动都发 resize 会让 tmux 反复重排重绘整个 pane（实测 kimi 界面以多种尺寸
+     * 叠印）。尺寸变化后 300ms 内无更新才发；期间有新变化则重置计时。
+     */
+    private val resizeDebounceRunnable = Runnable {
+        if (open && !destroyed.get()) {
+            webSocket?.send(
+                JSONObject().put("type", "resize").put("cols", lastCols).put("rows", lastRows).toString()
+            )
+        }
+    }
+
+    /** 抽干线程在断线期间挂起的等待锁；onOpen/close/destroy 时 notifyAll 唤醒。 */
+    private val openLock = Object()
+
     val isOpen: Boolean
         get() = open
 
@@ -122,12 +138,32 @@ class RemoteTerminalSession(
         Thread({
             val buffer = ByteArray(4096)
             while (true) {
+                // 断线/未连接时绝不读队列：读出来就只能丢（open=false 时没有可发的连接），
+                // 丢弃会把一个转义序列拦腰截断——实测抓到终端 DA 应答 ESC[>41;320;0c 在
+                // 重连窗口被截成 "41;320;0c" 文本进了 bash 输入行。这里阻塞等待连接恢复，
+                // 字节完整留在队列里；首次 connect 前积压（如 TerminalEmulator 的 DA 应答）
+                // 也是期望行为，连上后一次性完整发出。
+                // 队列是 4096B 的 ByteQueue（termux 源码：write 在队列满时阻塞等待消费），
+                // 所以断线期间积压超过 4096B 会阻塞 write 调用方——但断线属短暂状态、
+                // 正常输入量远到不了上限，可接受；openLock 与 ByteQueue 内部锁相互独立，
+                // 且等待发生在 read() 之外，不会死锁。
+                val canSend = synchronized(openLock) {
+                    while (!open && !destroyed.get() && !intentional.get()) {
+                        try {
+                            openLock.wait()
+                        } catch (_: InterruptedException) {
+                        }
+                    }
+                    open && !destroyed.get() && !intentional.get()
+                }
+                if (!canSend) break // destroy() 或主动 close()：线程退出
                 val n = session.mTerminalToProcessIOQueue.read(buffer, true)
                 if (n < 0) break // 队列已关闭（destroy()），线程退出
                 if (n > 0 && open) {
                     webSocket?.send(buffer.toByteString(0, n))
                 }
-                // 连接建立前/断开后的输入直接丢弃（与本地 pty 进程已退出的行为一致）
+                // 极限竞态：read 之后、send 之前连接恰好断开（onFailure 清 open），
+                // ws.send 返回 false 字节仍会丢；窗口极小且字节无法回塞队列，接受该残留风险。
             }
         }, "RemoteTerminalSession-input-drain").apply {
             isDaemon = true
@@ -168,16 +204,18 @@ class RemoteTerminalSession(
         webSocket = httpClient.newWebSocket(request, SessionWebSocketListener())
     }
 
-    /** 终端尺寸变化时调用（TerminalActivity 在 onEmulatorSet 回调里转发）。 */
+    /**
+     * 终端尺寸变化时调用（TerminalActivity 在 onEmulatorSet 回调里转发）。
+     * 连接建立时的首次尺寸走 connect() 的 URL query（不防抖）；连接后的变化走
+     * resize 控制帧，300ms 去抖（见 resizeDebounceRunnable 注释）。
+     */
     fun sendResize(cols: Int, rows: Int) {
         if (cols == lastCols && rows == lastRows) return
         lastCols = cols
         lastRows = rows
-        if (open) {
-            webSocket?.send(
-                JSONObject().put("type", "resize").put("cols", cols).put("rows", rows).toString()
-            )
-        }
+        if (!open) return // 未连接不发；重连时最新尺寸由 doConnect 的 URL query 携带
+        mainHandler.removeCallbacks(resizeDebounceRunnable)
+        mainHandler.postDelayed(resizeDebounceRunnable, 300)
     }
 
     /** 特殊键栏注入输入；与键盘输入走完全相同的通道（write → 输入队列 → 抽干线程 → ws）。 */
@@ -194,6 +232,9 @@ class RemoteTerminalSession(
         intentional.set(true)
         open = false
         mainHandler.removeCallbacks(reconnectRunnable)
+        mainHandler.removeCallbacks(resizeDebounceRunnable)
+        // 唤醒可能在 openLock 上等待的抽干线程,让它看到 intentional 后退出
+        synchronized(openLock) { openLock.notifyAll() }
         webSocket?.close(1000, null)
     }
 
@@ -296,8 +337,12 @@ class RemoteTerminalSession(
     private inner class SessionWebSocketListener : WebSocketListener() {
 
         override fun onOpen(ws: WebSocket, response: Response) {
-            open = true
             reconnectAttempt = 0
+            // 唤醒断线期间挂起的抽干线程:队列里积压的输入(含 DA 应答等)此刻完整发出
+            synchronized(openLock) {
+                open = true
+                openLock.notifyAll()
+            }
             notifyState(State.OPEN, null)
         }
 
