@@ -46,9 +46,6 @@ class SetupActivity : AppCompatActivity() {
         private val SESSION_NAME_REGEX = Regex("^[a-zA-Z0-9_-]+$")
     }
 
-    /** 已存机器(登录页下拉快速切换)。 */
-    private data class Machine(val name: String, val host: String, val port: String, val token: String)
-
     private lateinit var prefs: SharedPreferences
 
     private val httpClient = OkHttpClient.Builder()
@@ -65,6 +62,8 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var testButton: Button
     private lateinit var connectButton: Button
     private lateinit var machineSpinner: Spinner
+
+    /** 已存机器(登录页下拉快速切换)；读写逻辑与 TerminalActivity 共用 MachineStore。 */
     private val machines = ArrayList<Machine>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -154,37 +153,17 @@ class SetupActivity : AppCompatActivity() {
 
     private fun loadMachines() {
         machines.clear()
-        val raw = prefs.getString(KEY_MACHINES, null)
-        if (raw == null) {
+        if (!prefs.contains(KEY_MACHINES)) {
             // 首次:预置两台常用机器,token 留空,连接一次后自动回填
             machines += Machine("公司服务器", "CHANGE_ME_SERVER_TAILNET_IP", DEFAULT_PORT, "")
             machines += Machine("家里电脑", "CHANGE_ME_MAC_TAILNET_IP", DEFAULT_PORT, "")
             saveMachines()
             return
         }
-        try {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                machines += Machine(
-                    o.optString("name"), o.optString("host"),
-                    o.optString("port", DEFAULT_PORT), o.optString("token")
-                )
-            }
-        } catch (t: Throwable) {
-            machines.clear() // 数据损坏则重置,不崩溃
-        }
+        machines += MachineStore.load(prefs)
     }
 
-    private fun saveMachines() {
-        val arr = JSONArray()
-        for (m in machines) {
-            arr.put(org.json.JSONObject()
-                .put("name", m.name).put("host", m.host)
-                .put("port", m.port).put("token", m.token))
-        }
-        prefs.edit().putString(KEY_MACHINES, arr.toString()).apply()
-    }
+    private fun saveMachines() = MachineStore.save(prefs, machines)
 
     private fun refreshMachineSpinner(selectHost: String? = null) {
         val names = listOf(getString(R.string.machine_manual)) + machines.map { it.name }

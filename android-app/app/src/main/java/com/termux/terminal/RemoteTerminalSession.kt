@@ -109,18 +109,30 @@ class RemoteTerminalSession(
     }
 
     /**
-     * resize 去抖（500ms）：软键盘弹起/收起动画、IME 候选栏高度变化会让行数快速抖动，
-     * 每次抖动都发 resize 会让 tmux 反复重排重绘整个 pane（实测 kimi 界面以多种尺寸
-     * 叠印 = "裂屏"）。尺寸变化后 500ms 内无更新才发（覆盖 IME 动画全程），期间有新
-     * 变化则重置计时——动画期间所有中间尺寸合并为最后一次。服务端另有配合：尺寸
-     * 稳定后对 tmux 会话执行 refresh-client 强制全量重绘，清掉残留残影。
+     * resize 去抖（200ms）：软键盘弹起/收起动画、IME 候选栏高度变化会让行数快速抖动，
+     * 每次抖动都发 resize 会让 tmux 反复重排重绘。200ms 内无更新才发，期间重置计时。
+     *
+     * 发送前主动清本地屏（裂屏根治）：本地 TerminalEmulator 在键盘动画瞬间就按新行数
+     * 重排（TerminalBuffer.resize 只搬移内容不清屏），而服务端 pty 要等本次 resize 才
+     * 变尺寸——错位期间 tmux 用 diff 增量重绘，基于错误画面推算，陈旧行没人擦
+     * （实测：kimi 输入框画在两个垂直位置、tmux 状态栏两条）。这里在发 resize 的
+     * 同时把本地屏清成空白：之后服务端立即全量 refresh-client（无 diff），画面成为
+     * 纯 tmux 网格的忠实拷贝，残影无处藏身。代价是 ~百 ms 白屏，可接受。
      */
     private val resizeDebounceRunnable = Runnable {
         if (open && !destroyed.get()) {
+            clearLocalScreen()
             webSocket?.send(
                 JSONObject().put("type", "resize").put("cols", lastCols).put("rows", lastRows).toString()
             )
         }
+    }
+
+    /** 把本地 emulator 可视区清成空白格并触发重绘（本 Runnable 已在主线程，直接操作）。 */
+    private fun clearLocalScreen() {
+        val emulator = session.mEmulator ?: return
+        emulator.screen.blockSet(0, 0, emulator.mColumns, emulator.mRows, ' '.code, TextStyle.NORMAL)
+        client.onTextChanged(session)
     }
 
     /** 抽干线程在断线期间挂起的等待锁；onOpen/close/destroy 时 notifyAll 唤醒。 */
@@ -176,11 +188,15 @@ class RemoteTerminalSession(
     /**
      * 建立 WebSocket 连接（幂等：已连接或连接中调用无效）。
      * cols/rows 取自 TerminalView 当前终端尺寸，用于服务器侧 pty 的初始大小。
+     * 注意：lastCols/lastRows 只能在真正发起连接时更新——onEmulatorSet 每次尺寸变化
+     * 都会先调 connect() 再调 sendResize()，若此处无条件覆盖 last，sendResize 的
+     * 去重判断永远相等、resize 永远发不出去（实测：tmux 客户端卡在初始尺寸，
+     * 键盘弹收后 App 与 tmux 尺寸错位 = 裂屏/黑屏的总根因）。
      */
     fun connect(cols: Int, rows: Int) {
+        if (webSocket != null || destroyed.get()) return
         lastCols = cols
         lastRows = rows
-        if (webSocket != null || destroyed.get()) return
         doConnect()
     }
 
@@ -209,7 +225,7 @@ class RemoteTerminalSession(
     /**
      * 终端尺寸变化时调用（TerminalActivity 在 onEmulatorSet 回调里转发）。
      * 连接建立时的首次尺寸走 connect() 的 URL query（不防抖）；连接后的变化走
-     * resize 控制帧，500ms 去抖（见 resizeDebounceRunnable 注释）。
+     * resize 控制帧，200ms 去抖（见 resizeDebounceRunnable 注释）。
      */
     fun sendResize(cols: Int, rows: Int) {
         if (cols == lastCols && rows == lastRows) return
@@ -217,7 +233,7 @@ class RemoteTerminalSession(
         lastRows = rows
         if (!open) return // 未连接不发；重连时最新尺寸由 doConnect 的 URL query 携带
         mainHandler.removeCallbacks(resizeDebounceRunnable)
-        mainHandler.postDelayed(resizeDebounceRunnable, 500)
+        mainHandler.postDelayed(resizeDebounceRunnable, 200)
     }
 
     /** 特殊键栏注入输入；与键盘输入走完全相同的通道（write → 输入队列 → 抽干线程 → ws）。 */

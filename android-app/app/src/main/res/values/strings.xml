@@ -70,6 +70,8 @@
     <string name="error_attach_failed">终端初始化失败：%1$s</string>
 
     <!-- 新建标签对话框：接入已有会话 -->
+    <string name="label_machine">选择机器</string>
+    <string name="machine_current">当前机器（%1$s）</string>
     <string name="label_existing_sessions">接入已有会话（tmux）</string>
     <string name="sessions_loading">加载中…</string>
     <string name="sessions_none">无可用会话</string>

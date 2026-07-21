@@ -95,18 +95,21 @@ class TerminalActivity : AppCompatActivity(),
 
         /** 文件推送去重窗口：同一 name|size 在该窗口内（多标签同时收到同一广播）只提示一次。 */
         private const val PUSH_DEDUPE_WINDOW_MS = 10_000L
-
-        /** 远端不消费鼠标点击的程序：mouse tracking 下单击仍弹软键盘（TUI 标签则把点击发给被控端）。 */
-        private val PLAIN_SHELL_APPS = setOf("shell", "tmux")
     }
 
-    /** 一个标签。session 的生命周期由 Activity 管理（重连时会整个替换）。 */
+    /** 一个标签。session 的生命周期由 Activity 管理（重连时会整个替换）。
+     *  每个标签自带连接三元组（多机切换：不同标签可以连不同机器）。 */
     private class Tab(
         val id: Int,
         val label: String,
         val app: String,
         val tmuxSession: String?,
         var session: RemoteTerminalSession?,
+        val host: String,
+        val port: Int,
+        val token: String,
+        /** 机器显示名（机器列表里的名字；查不到则为 host），用于标签标题。 */
+        val machineName: String,
     ) {
         /** 双指缩放的字号，按标签各自记住。 */
         var fontScale = 1f
@@ -280,16 +283,34 @@ class TerminalActivity : AppCompatActivity(),
      * 任何 app 都落进 tmux 命名会话（服务端对所有 app 的 session 参数都包 tmux）：
      * 手机断线进程不死、server 本机可 `tmux attach -t <名>` 接力、断线重连即恢复原画面。
      * 不填会话名时自动生成 `<app>-<序号>`（序号=同 app 现有标签数+1，撞名则顺延）。
+     * machine != null 时该标签连指定机器（多机切换），否则连默认机器（intent 带进来的那台）。
      */
-    private fun openTab(app: String, tmuxSession: String?) {
+    private fun openTab(app: String, tmuxSession: String?, machine: Machine? = null) {
         val sessionName = tmuxSession?.trim()?.takeIf { it.isNotEmpty() } ?: autoSessionName(app)
-        // 标签标题直接用会话名，方便和 server 本机 `tmux ls` 对应
-        val tab = Tab(nextTabId++, sessionName, app, sessionName, null)
+        val mHost: String
+        val mPort: Int
+        val mToken: String
+        val mName: String
+        if (machine == null) {
+            mHost = host; mPort = port; mToken = token; mName = defaultMachineName()
+        } else {
+            mHost = machine.host
+            mPort = machine.port.toIntOrNull() ?: 7681
+            mToken = machine.token
+            mName = machine.name
+        }
+        // 标签标题 = 机器名/会话名(如 公司服务器/kimi-2),多机标签一眼可辨,也和 `tmux ls` 对得上
+        val tab = Tab(nextTabId++, "$mName/$sessionName", app, sessionName, null, mHost, mPort, mToken, mName)
         tab.session = createSession(tab)
         tabs.add(tab)
         updateKeepAlive()
         switchToTab(tab)
     }
+
+    /** 默认机器（intent 带进来的那台）的显示名：机器列表里查到就用列表名，否则用 host。 */
+    private fun defaultMachineName(): String =
+        MachineStore.load(getSharedPreferences(MachineStore.PREFS_NAME, MODE_PRIVATE))
+            .firstOrNull { it.host == host }?.name ?: host
 
     private fun autoSessionName(app: String): String {
         val used = tabs.mapNotNull { it.tmuxSession }.toHashSet()
@@ -304,7 +325,8 @@ class TerminalActivity : AppCompatActivity(),
 
     private fun createSession(tab: Tab): RemoteTerminalSession {
         tab.stateText = getString(R.string.state_connecting)
-        return RemoteTerminalSession(host, port, tab.app, tab.tmuxSession, token, this, this)
+        // 每个标签用自己的三元组连接(多机标签各连各的机器)
+        return RemoteTerminalSession(tab.host, tab.port, tab.app, tab.tmuxSession, tab.token, this, this)
     }
 
     /** 切换标签：TerminalView 重新 attach；后台标签的连接与 emulator 保持不动。 */
@@ -389,18 +411,55 @@ class TerminalActivity : AppCompatActivity(),
         val sessionEdit = view.findViewById<TextInputEditText>(R.id.dialog_edit_session)
         val sessionsStatus = view.findViewById<TextView>(R.id.dialog_sessions_status)
         val sessionsContainer = view.findViewById<LinearLayout>(R.id.dialog_sessions_container)
+        val machineSpinner = view.findViewById<android.widget.Spinner>(R.id.dialog_spinner_machine)
+
+        // 机器下拉:第一项"当前机器"(intent 带进来的连接),后面是登录页存的机器列表
+        val prefs = getSharedPreferences(MachineStore.PREFS_NAME, MODE_PRIVATE)
+        val machines = MachineStore.load(prefs)
+        val spinnerNames = mutableListOf(getString(R.string.machine_current, defaultMachineName()))
+        spinnerNames += machines.map { it.name }
+        val spinnerAdapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_item, spinnerNames)
+        spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        machineSpinner.adapter = spinnerAdapter
+        // 默认机器若在列表里则预选对应项,免得用户每次重选
+        val defaultIdx = machines.indexOfFirst { it.host == host }
+        if (defaultIdx >= 0) machineSpinner.setSelection(defaultIdx + 1)
+
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.dialog_new_tab_title)
             .setView(view)
             .setPositiveButton(R.string.action_create, null)
             .setNegativeButton(R.string.action_cancel, null)
             .show()
-        // 接入已有会话：对话框打开时异步拉服务端活 tmux 会话列表；
-        // 请求失败/为空只在区域内提示"无可用会话"，不阻塞手动新建
-        fetchTmuxSessions(sessionsStatus, sessionsContainer) { name ->
-            openTab("tmux", name)
-            dialog.dismiss()
+
+        // 选中的机器(null = 当前机器)
+        fun selectedMachine(): Machine? {
+            val pos = machineSpinner.selectedItemPosition
+            return if (pos in 1..machines.size) machines[pos - 1] else null
         }
+
+        // 接入已有会话:按选中机器异步拉它的 tmux 会话列表,切换机器时重新拉;
+        // 请求失败/为空只在区域内提示"无可用会话",不阻塞手动新建
+        fun refetchSessions() {
+            sessionsContainer.removeAllViews()
+            sessionsStatus.visibility = View.VISIBLE
+            sessionsStatus.setText(R.string.sessions_loading)
+            val m = selectedMachine()
+            val h = m?.host ?: host
+            val p = m?.port?.toIntOrNull() ?: port
+            val t = m?.token ?: token
+            fetchTmuxSessions(h, p, t, sessionsStatus, sessionsContainer) { name ->
+                openTab("tmux", name, m)
+                dialog.dismiss()
+            }
+        }
+        machineSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, v: View?, position: Int, id: Long) =
+                refetchSessions()
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
+        refetchSessions()
+
         // 手动处理确定按钮，校验失败时不关闭对话框
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val app = when (radioApp.checkedRadioButtonId) {
@@ -419,14 +478,17 @@ class TerminalActivity : AppCompatActivity(),
                 sessionEdit.error = getString(R.string.error_session_invalid)
                 return@setOnClickListener
             }
-            openTab(app, typed.ifEmpty { null })
+            openTab(app, typed.ifEmpty { null }, selectedMachine())
             dialog.dismiss()
         }
     }
 
-    /** GET /sessions 列出活 tmux 会话；每项一个按钮，点按即开标签接入（app=tmux + session=名）。 */
-    private fun fetchTmuxSessions(status: TextView, container: LinearLayout, onPick: (String) -> Unit) {
-        val url = "http://$host:$port/sessions?token=${URLEncoder.encode(token, Charsets.UTF_8.name())}"
+    /** GET /sessions 列出指定机器的活 tmux 会话；每项一个按钮，点按即开标签接入（app=tmux + session=名）。 */
+    private fun fetchTmuxSessions(
+        mHost: String, mPort: Int, mToken: String,
+        status: TextView, container: LinearLayout, onPick: (String) -> Unit
+    ) {
+        val url = "http://$mHost:$mPort/sessions?token=${URLEncoder.encode(mToken, Charsets.UTF_8.name())}"
         httpClient.newCall(Request.Builder().url(url).build()).enqueue(object : Callback {
             override fun onResponse(call: Call, response: Response) {
                 val body = response.body?.string().orEmpty()
@@ -596,10 +658,12 @@ class TerminalActivity : AppCompatActivity(),
         }
         // 保底:无论走对话框还是通知,先弹 Toast 确保用户一定感知到
         Toast.makeText(this, getString(R.string.file_pushed_toast, name), Toast.LENGTH_LONG).show()
+        // 推送来自哪个标签的连接,下载 URL 就用哪个标签的机器(多机场景)
+        val tab = tabs.firstOrNull { it.session === session }
         if (inForeground) {
-            showFilePushedDialog(name, size)
+            showFilePushedDialog(name, size, tab)
         } else {
-            postFilePushedNotification(name, size)
+            postFilePushedNotification(name, size, tab)
         }
     }
 
@@ -610,15 +674,18 @@ class TerminalActivity : AppCompatActivity(),
         else -> "%.1fMB".format(size / 1024f / 1024f)
     }
 
-    /** 拼 /files 下载 URL；URLEncoder 把空格编成 '+'，路径段里 '+' 是字面量，需换成 %20。 */
-    private fun fileDownloadUrl(name: String): String {
+    /** 拼 /files 下载 URL（用来源标签的机器）；URLEncoder 把空格编成 '+'，路径段里 '+' 是字面量，需换成 %20。 */
+    private fun fileDownloadUrl(name: String, tab: Tab?): String {
+        val h = tab?.host ?: host
+        val p = tab?.port ?: port
+        val t = tab?.token ?: token
         val encodedName = URLEncoder.encode(name, Charsets.UTF_8.name()).replace("+", "%20")
-        return "http://$host:$port/files/$encodedName?token=${URLEncoder.encode(token, Charsets.UTF_8.name())}"
+        return "http://$h:$p/files/$encodedName?token=${URLEncoder.encode(t, Charsets.UTF_8.name())}"
     }
 
     /** DownloadManager 写公共 Download 目录，不需要 READ/WRITE 存储权限。 */
-    private fun downloadPushedFile(name: String) {
-        val request = DownloadManager.Request(Uri.parse(fileDownloadUrl(name)))
+    private fun downloadPushedFile(name: String, tab: Tab?) {
+        val request = DownloadManager.Request(Uri.parse(fileDownloadUrl(name, tab)))
             .setTitle(name)
             .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
@@ -629,17 +696,17 @@ class TerminalActivity : AppCompatActivity(),
         }
     }
 
-    private fun showFilePushedDialog(name: String, size: Long) {
+    private fun showFilePushedDialog(name: String, size: Long, tab: Tab?) {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.dialog_file_pushed_title)
             .setMessage(getString(R.string.dialog_file_pushed_message, name, formatSize(size)))
-            .setPositiveButton(R.string.action_download) { _, _ -> downloadPushedFile(name) }
+            .setPositiveButton(R.string.action_download) { _, _ -> downloadPushedFile(name, tab) }
             .setNegativeButton(R.string.action_cancel, null)
             .show()
     }
 
     /** App 在后台时的提示：系统通知，点击经 DownloadFileReceiver 触发同一个下载。 */
-    private fun postFilePushedNotification(name: String, size: Long) {
+    private fun postFilePushedNotification(name: String, size: Long, tab: Tab?) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
@@ -652,7 +719,7 @@ class TerminalActivity : AppCompatActivity(),
         }
         val intent = Intent(this, DownloadFileReceiver::class.java).apply {
             action = DownloadFileReceiver.ACTION_DOWNLOAD
-            putExtra(DownloadFileReceiver.EXTRA_URL, fileDownloadUrl(name))
+            putExtra(DownloadFileReceiver.EXTRA_URL, fileDownloadUrl(name, tab))
             putExtra(DownloadFileReceiver.EXTRA_NAME, name)
         }
         val pending = PendingIntent.getBroadcast(
@@ -826,7 +893,7 @@ class TerminalActivity : AppCompatActivity(),
         }
         val sb = StringBuilder()
             .append(tab.label).append(" [").append(tab.app).append(']')
-            .append(" @ ").append(host).append(':').append(port)
+            .append(" @ ").append(tab.host).append(':').append(tab.port)
         if (tab.stateText.isNotEmpty()) sb.append("  ·  ").append(tab.stateText)
         termTitle?.takeIf { it.isNotEmpty() }?.let { sb.append("  ·  ").append(it) }
         // 末尾固定显示版本号:让用户一眼确认装的是不是最新版(排查"以为装了新版"问题)
@@ -855,16 +922,10 @@ class TerminalActivity : AppCompatActivity(),
         // 只用来终止 fling，不做任何翻译。（正常的滑动不会走到这里：GestureDetector
         // 只有位移始终小于 touch slop 才回调 onSingleTapConfirmed。）
         if (abortFlingIfRunning()) return
-        // 与鼠标上报的冲突处理:mouse tracking 开启(tmux 会话已 mouse on)时,
-        // 单击已在 TerminalView 的手势层作为鼠标事件发给被控端。
-        // 但 shell/tmux 标签里远端不消费点击(顶多选中 pane),单击应照旧弹键盘;
-        // kimi/claude 等 TUI 标签点击可能是在操作界面,保持转发、不弹键盘(用底栏"键盘"键)。
-        val emulator = terminalView.mEmulator
-        if (emulator?.isMouseTrackingActive == true && currentTab?.app !in PLAIN_SHELL_APPS) return
-        // 注:曾经的"TUI 点选翻译"(点按某行 = 连发 ↑/↓ 把选择挪过去)已彻底移除——
-        // 全量 tmux 化后备用缓冲区常开,行距换算稍有偏差就把单击误译成几十次方向键
-        // (弹不出键盘、界面乱滚),且功能与底栏 ⏎←↑↓→ 重复。TUI 菜单导航请用底栏方向键。
-        // 干净单击(fling 已停、非 mouse tracking)一律弹软键盘:
+        // mouse tracking(tmux mouse on)时:单击已被 TerminalView 的手势层(onUp)
+        // 作为鼠标事件转发给被控端——TUI(kimi/claude)标签的点选定位能力靠它保留。
+        // 但转发不等于要牺牲键盘:用户在 TUI 里点完输入框通常紧接着要打字,
+        // 所以任何干净单击都继续往下弹软键盘(不再按 app 类型早退)。
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.showSoftInput(terminalView, InputMethodManager.SHOW_IMPLICIT)
     }

@@ -12,6 +12,19 @@
         android:paddingRight="24dp"
         android:paddingTop="16dp">
 
+        <!-- 选择机器:数据源 = 登录页"存为机器"的同一份列表;选哪台,该标签就连哪台 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/label_machine"
+            android:textStyle="bold" />
+
+        <Spinner
+            android:id="@+id/dialog_spinner_machine"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp" />
+
         <RadioGroup
             android:id="@+id/dialog_radio_app"
             android:layout_width="match_parent"

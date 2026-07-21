@@ -10,25 +10,27 @@ disable-model-invocation: true
 
 ## APK 下载与发布(手机装这个)
 
-APK 文件名带版本号:`awesome-me-<versionName>.apk`(如 awesome-me-1.3.4.apk),
+APK 文件名带版本号:`awesome-me-<versionName>.apk`(如 awesome-me-1.3.3.apk),
 构建时由 app/build.gradle 的 applicationVariants 直接产出,不靠手工改名。
 
-- **主渠道 = GitHub Release**:本仓库 [Releases](https://github.com/alangong0521/awesome-me/releases) 页,
-  asset 名 `awesome-me-<version>.apk`。手机浏览器下载安装(允许未知来源),覆盖安装即可升级。
-- **备用渠道 1(duckdns 固定链接)**:https://nio-cva.duckdns.org/dl/remote-terminal/app-debug.apk
-  (HTTP Basic 认证,用户名/密码凭证私下分发,不在本仓库公开)——永远指向最新构建,无版本区分,仅应急。
-- **备用渠道 2(Linode)**:scp 手动同步到下载目录,同样仅应急。
+- **主渠道 = GitHub Release**:`alangong0521/awesome-me`,每个版本一个 release,
+  asset 名 `awesome-me-<version>.apk`。手机浏览器打开 release 页下载安装(允许未知来源),
+  覆盖安装即可升级。
+- **备用渠道 1(duckdns)**:https://nio-cva.duckdns.org/dl/remote-terminal/app-debug.apk
+  (HTTP Basic 认证,用户名/密码凭证私下分发,不在本仓库公开)——永远是"最新构建"覆盖同一路径,无版本区分,仅应急。
+- **备用渠道 2(Linode)**:`/opt/downloads/remote-terminal/app-debug.apk`,scp 手动同步。
 
-发布动作只做两件事:`gh release create` 传 asset +(可选)scp 到 Linode;marketplace 副本等历史渠道不再维护。
+发布动作只做两件事:`gh release create` 传 asset +(可选)scp 到 Linode;
+~/public-dl 仅作为 duckdns 备用链接的后端目录保留,marketplace 副本等历史渠道不再维护。
 
 ## 四场景速查
 
 | 场景 | 客户端 | 目标 host | token |
 |---|---|---|---|
-| 手机→server(公司) | 安卓 App | `<server的Tailscale-IP>:7681` | `change-me` |
-| 手机→家 Mac | 安卓 App | `<家Mac的Tailscale-IP>:7681` | Mac 上 `~/remote-terminal/server/config.json` |
-| server→家 Mac | `rt-client.js` | `<家Mac的Tailscale-IP>` | 同上 Mac 的 token |
-| 家 Mac→server | `rt-client.js` | `<server的Tailscale-IP>` | `change-me` |
+| 手机→server(公司) | 安卓 App | `CHANGE_ME_SERVER_TAILNET_IP:7681` | `CHANGE_ME_TOKEN` |
+| 手机→家 Mac | 安卓 App | `CHANGE_ME_MAC_TAILNET_IP:7681` | Mac 上 `~/remote-terminal/server/config.json` |
+| server→家 Mac | `rt-client.js` | `CHANGE_ME_MAC_TAILNET_IP` | 同上 Mac 的 token |
+| 家 Mac→server | `rt-client.js` | `CHANGE_ME_SERVER_TAILNET_IP` | `CHANGE_ME_TOKEN` |
 
 PC 客户端用法(依赖 `npm i ws`):
 

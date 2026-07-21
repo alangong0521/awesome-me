@@ -223,9 +223,11 @@ wss.on('connection', (ws) => {
       if (ctrl.type === 'resize' && ctrl.cols > 0 && ctrl.rows > 0) {
         term.resize(Math.min(ctrl.cols, 500), Math.min(ctrl.rows, 200));
         if (inTmux) {
-          // 裂屏修复:软键盘弹起/收起动画期间尺寸抖动,tmux 按中间尺寸反复重排会在
-          // pane 里留下残影(多段输入框/多条状态栏叠印)。尺寸稳定 500ms 后强制 tmux
-          // 全量重绘清残影。注意 refresh-client 的 -t 要的是客户端(tty)而非会话名
+          // 裂屏修复:resize 错位期间 tmux 的 diff 增量重绘会基于陈旧画面推算,
+          // 留下残影(kimi 双输入框/双状态栏)。App 端发 resize 时已同步清本地屏,
+          // 服务端这里收到 resize 后立即全量 refresh-client(150ms 仅做合并),
+          // 让画面尽快成为纯 tmux 网格的忠实拷贝。
+          // 注意 refresh-client 的 -t 要的是客户端(tty)而非会话名
           // (实测 -t <会话名> 报 can't find client),先 list-clients 再逐个刷新。
           clearTimeout(ws._refreshTimer);
           ws._refreshTimer = setTimeout(() => {
@@ -236,7 +238,7 @@ wss.on('connection', (ws) => {
                   execFile(tmuxBin, ['refresh-client', '-t', c], () => {});
                 }
               });
-          }, 500);
+          }, 150);
         }
       }
     } catch (_) { /* ignore malformed control frames */ }

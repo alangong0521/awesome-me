@@ -8,8 +8,8 @@
 //   -a, --app <name>     服务端 app 名:kimi|claude|tmux|shell(默认 shell)
 //   -s, --session <name> tmux 会话名(app=tmux 时用,默认 phone)
 // 例:
-//   RT_TOKEN=change-me node rt-client.js 100.64.1.2            # 远端 shell
-//   RT_TOKEN=change-me node rt-client.js 100.64.1.2 -a tmux -s work
+//   RT_TOKEN=CHANGE_ME_TOKEN node rt-client.js 100.64.1.2            # 远端 shell
+//   RT_TOKEN=CHANGE_ME_TOKEN node rt-client.js 100.64.1.2 -a tmux -s work
 // 退出:远端进程退出自动断;本地 Ctrl+\ 强制退出客户端。
 const { WebSocket } = require('ws');
 
