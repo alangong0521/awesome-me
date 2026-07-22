@@ -9,6 +9,7 @@ import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.RadioGroup
 import android.widget.Spinner
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -113,7 +114,72 @@ class SetupActivity : AppCompatActivity() {
         testButton.setOnClickListener { testConnection() }
         connectButton.setOnClickListener { saveAndConnect() }
         findViewById<Button>(R.id.btn_battery).setOnClickListener { requestIgnoreBatteryOptimizations() }
+
+        showSplash()
     }
+
+    /**
+     * 开屏欢迎画面:盖在登录页上的全屏浮层(窗口主题背景本来就是终端黑,无白屏/黑屏间隙),
+     * 艺术字 App 名(等宽粗体 + 加宽字距 + 与图标一致的蓝紫渐变着色),1.6s 后 400ms 淡出移除。
+     */
+    private fun showSplash() {
+        val root = findViewById<android.view.ViewGroup>(android.R.id.content)
+        val overlay = android.widget.FrameLayout(this).apply {
+            layoutParams = android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(androidx.core.content.ContextCompat.getColor(this@SetupActivity, R.color.terminal_bg))
+            isClickable = true // 挡住 splash 期间对下方的误触
+        }
+        val title = TextView(this).apply {
+            text = "AwesomeMe"
+            textSize = 52f
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+            letterSpacing = 0.08f
+            setTextColor(android.graphics.Color.WHITE) // shader 生效前的占位色
+            setShadowLayer(24f, 0f, 0f, 0x804F8CFF.toInt()) // 泛光,增强"艺术感"
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.CENTER
+            )
+        }
+        val subtitle = TextView(this).apply {
+            text = ">_"
+            textSize = 28f
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+            setTextColor(androidx.core.content.ContextCompat.getColor(this@SetupActivity, R.color.status_text))
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.CENTER
+            ).apply { topMargin = dp(96) }
+        }
+        overlay.addView(title)
+        overlay.addView(subtitle)
+        root.addView(overlay)
+        // 等文字量出宽度后挂蓝紫渐变(此时 width 才非 0)
+        title.viewTreeObserver.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                title.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                title.paint.shader = android.graphics.LinearGradient(
+                    0f, 0f, title.width.toFloat(), 0f,
+                    intArrayOf(0xFF4F8CFF.toInt(), 0xFF8A5CF5.toInt()), null,
+                    android.graphics.Shader.TileMode.CLAMP
+                )
+                title.invalidate()
+            }
+        })
+        overlay.postDelayed({
+            overlay.animate().alpha(0f).setDuration(400).withEndAction {
+                root.removeView(overlay)
+            }.start()
+        }, 1600)
+    }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
     /**
      * 引导用户把 App 加入电池优化白名单:后台保活双保险(前台服务+唤醒锁之外,

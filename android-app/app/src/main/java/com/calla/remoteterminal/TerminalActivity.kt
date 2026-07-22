@@ -318,7 +318,9 @@ class TerminalActivity : AppCompatActivity(),
     }
 
     override fun onDestroy() {
-        // 先停前台服务（释放唤醒锁），再逐个关连接
+        // 先停前台服务（释放唤醒锁），再逐个关连接;收件箱下载轮询一并停
+        downloadHandler.removeCallbacksAndMessages(null)
+        activeDownloads.clear()
         KeepAliveService.stop(this)
         for (tab in tabs) {
             tab.session?.destroy()
@@ -1063,19 +1065,14 @@ class TerminalActivity : AppCompatActivity(),
                     setTextColor(ContextCompat.getColor(this@TerminalActivity, R.color.state_connected))
                 })
             } else {
-                row.addView(Button(this).apply {
+                val btn = Button(this).apply {
                     text = getString(R.string.action_download)
                     textSize = 12f
-                    setOnClickListener {
-                        val path = downloadInboxItem(item)
-                        if (path != null) {
-                            FileInbox.markDownloaded(inboxPrefs(), item, path)
-                            refreshInboxBadge()
-                            it.visibility = View.GONE
-                            info.append(" · ${getString(R.string.inbox_downloaded)}\n$path")
-                        }
-                    }
-                })
+                }
+                btn.setOnClickListener {
+                    startInboxDownload(item, row, info, btn)
+                }
+                row.addView(btn)
             }
             list.addView(row)
         }
@@ -1096,8 +1093,16 @@ class TerminalActivity : AppCompatActivity(),
     private fun downloadDestPath(name: String): String =
         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).path + "/awesome-me/" + name
 
-    /** 用收件箱条目自己的机器三元组下载;成功返回存放完整路径,失败返回 null。 */
-    private fun downloadInboxItem(item: InboxItem): String? {
+    /** 进行中的下载:轮询进度要更新的行视图(对话框关掉后视图失效,轮询仍继续到完成)。 */
+    private val activeDownloads = HashMap<Long, Pair<TextView?, android.widget.ProgressBar?>>()
+    private val downloadHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * 收件箱条目下载:入队后把"下载"按钮换成进度条,每 500ms 轮询 DownloadManager
+     * 更新已下载/总字节;成功 → 标记已下载并显示完整路径;失败 → 恢复按钮。
+     * 轮询挂在 Activity 级 handler 上,对话框中途关闭也不丢完成标记。
+     */
+    private fun startInboxDownload(item: InboxItem, row: LinearLayout, info: TextView, btn: Button) {
         val encodedName = URLEncoder.encode(item.name, Charsets.UTF_8.name()).replace("+", "%20")
         val url = "http://${item.host}:${item.port}/files/$encodedName" +
             "?token=${URLEncoder.encode(item.token, Charsets.UTF_8.name())}"
@@ -1106,18 +1111,83 @@ class TerminalActivity : AppCompatActivity(),
             .setTitle(item.name)
             .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "awesome-me/${item.name}")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-        return runCatching {
-            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-        }.onFailure {
+        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val id = runCatching { dm.enqueue(request) }.getOrElse {
             Toast.makeText(this, getString(R.string.download_failed, it.message ?: ""), Toast.LENGTH_LONG).show()
-        }.isSuccess.let { ok ->
-            if (ok) {
-                Toast.makeText(this, getString(R.string.download_started, destPath), Toast.LENGTH_LONG).show()
-                destPath
-            } else {
-                null
-            }
+            return
         }
+        // 按钮位置换成进度条
+        val idx = row.indexOfChild(btn)
+        row.removeView(btn)
+        val progressWrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        val bar = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            layoutParams = LinearLayout.LayoutParams(dp(96), LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+        progressWrap.addView(bar)
+        row.addView(progressWrap, idx)
+        activeDownloads[id] = info to bar
+        pollInboxDownload(dm, id, item, destPath)
+    }
+
+    private fun pollInboxDownload(dm: DownloadManager, id: Long, item: InboxItem, destPath: String) {
+        val (info, bar) = activeDownloads[id] ?: (null to null)
+        val c = dm.query(DownloadManager.Query().setFilterById(id))
+        if (c != null && c.moveToFirst()) {
+            val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            val soFar = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+            val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+            c.close()
+            // 进度条与百分比文本(总行数优先用服务端 content-length,退化为广播里的 size)
+            val denom = if (total > 0) total else item.size
+            if (denom > 0) {
+                bar?.progress = ((soFar * 100) / denom).toInt().coerceIn(0, 100)
+            } else {
+                bar?.isIndeterminate = true
+            }
+            when (status) {
+                DownloadManager.STATUS_SUCCESSFUL -> {
+                    activeDownloads.remove(id)
+                    FileInbox.markDownloaded(inboxPrefs(), item, destPath)
+                    refreshInboxBadge()
+                    info?.let {
+                        it.append(" · ${getString(R.string.inbox_downloaded)}\n$destPath")
+                        // 进度条换成绿色"已下载"
+                        val parent = bar?.parent as? LinearLayout
+                        parent?.removeAllViews()
+                        parent?.addView(TextView(this).apply {
+                            text = getString(R.string.inbox_downloaded)
+                            textSize = 12f
+                            setTextColor(ContextCompat.getColor(this@TerminalActivity, R.color.state_connected))
+                        })
+                    }
+                    return
+                }
+                DownloadManager.STATUS_FAILED -> {
+                    activeDownloads.remove(id)
+                    val parent = bar?.parent as? LinearLayout
+                    parent?.removeAllViews()
+                    parent?.addView(Button(this).apply {
+                        text = getString(R.string.action_download)
+                        textSize = 12f
+                        setOnClickListener { v ->
+                            val row = v.parent.parent as? LinearLayout ?: return@setOnClickListener
+                            startInboxDownload(item, row, info!!, v as Button)
+                        }
+                    })
+                    Toast.makeText(this, getString(R.string.download_failed, "status=$status"), Toast.LENGTH_LONG).show()
+                    return
+                }
+                else -> { // PENDING/RUNNING/PAUSED:继续轮询
+                }
+            }
+        } else {
+            c?.close()
+        }
+        downloadHandler.postDelayed({ pollInboxDownload(dm, id, item, destPath) }, 500)
     }
 
     private fun formatSize(size: Long): String = when {
