@@ -1384,6 +1384,14 @@ class TerminalActivity : AppCompatActivity(),
         val lp = terminalView.layoutParams
         lp.height = findViewById<android.widget.FrameLayout>(R.id.terminal_container).height
         terminalView.layoutParams = lp
+        // 瞬时切换、不露滚动过程:resize 之后本地 emulator 立即重排(逐行位移 = 用户看到
+        // 的"滚动很多行"),随后 200ms 去抖清屏 + 服务端全量重绘(~400ms)。把这段窗口
+        // 用 alpha=0 盖住,新内容到达(onTextChanged)或兜底 800ms 后瞬间恢复——用户
+        // 看到的是"键盘到位 → 短暂遮罩 → 稳定画面",没有滚动过程。
+        terminalView.alpha = 0f
+        terminalView.postDelayed({
+            if (terminalView.alpha == 0f) terminalView.alpha = 1f
+        }, 800)
     }
 
     /**
@@ -1869,6 +1877,8 @@ class TerminalActivity : AppCompatActivity(),
 
     override fun onTextChanged(changedSession: TerminalSession) {
         if (changedSession !== currentTab?.session?.session) return
+        // IME 弹/收 resize 后新内容到达 = 画面已重绘稳定,瞬间恢复可见(见 imeSettleRunnable)
+        if (terminalView.alpha == 0f) terminalView.alpha = 1f
         // 根因修复（滚屏跳动）之一：Termux 的 TerminalView.onScreenUpdated() 在任何新输出
         // 到达时都会把 mTopRow 强制归零（拽回底部，只有文本选择时豁免）。本地 Termux 里
         // shell 只在用户敲命令时输出，无所谓；但这里远端输出持续到达（tmux 状态栏时钟、

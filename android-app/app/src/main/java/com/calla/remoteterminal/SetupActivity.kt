@@ -119,8 +119,9 @@ class SetupActivity : AppCompatActivity() {
     }
 
     /**
-     * 开屏欢迎画面:盖在登录页上的全屏浮层(窗口主题背景本来就是终端黑,无白屏/黑屏间隙),
-     * 艺术字 App 名(等宽粗体 + 加宽字距 + 与图标一致的蓝紫渐变着色),1.6s 后 400ms 淡出移除。
+     * 开屏欢迎画面:盖在登录页上的全屏浮层(窗口主题背景本来就是终端黑,无白屏/黑屏间隙)。
+     * 动画组合:标题淡入+缩放上浮(0.8→1.0)、泛光呼吸(两周期)、副标与小字延迟淡入,
+     * 3.6s 后 400ms 淡出,总时长约 4s。艺术字 = 等宽粗体 + 加宽字距 + 蓝紫渐变着色。
      */
     private fun showSplash() {
         val root = findViewById<android.view.ViewGroup>(android.R.id.content)
@@ -138,7 +139,10 @@ class SetupActivity : AppCompatActivity() {
             typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
             letterSpacing = 0.08f
             setTextColor(android.graphics.Color.WHITE) // shader 生效前的占位色
-            setShadowLayer(24f, 0f, 0f, 0x804F8CFF.toInt()) // 泛光,增强"艺术感"
+            setShadowLayer(24f, 0f, 0f, 0x804F8CFF.toInt()) // 泛光(呼吸动画调整半径)
+            alpha = 0f
+            scaleX = 0.8f
+            scaleY = 0.8f
             layoutParams = android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -150,14 +154,28 @@ class SetupActivity : AppCompatActivity() {
             textSize = 28f
             typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
             setTextColor(androidx.core.content.ContextCompat.getColor(this@SetupActivity, R.color.status_text))
+            alpha = 0f
             layoutParams = android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.CENTER
             ).apply { topMargin = dp(96) }
         }
+        // 内部使用声明(低调小字)
+        val tagline = TextView(this).apply {
+            text = "nio-cva团队开发，仅供cva团队内部使用"
+            textSize = 12f
+            setTextColor(androidx.core.content.ContextCompat.getColor(this@SetupActivity, R.color.text_dim))
+            alpha = 0f
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.CENTER
+            ).apply { topMargin = dp(150) }
+        }
         overlay.addView(title)
         overlay.addView(subtitle)
+        overlay.addView(tagline)
         root.addView(overlay)
         // 等文字量出宽度后挂蓝紫渐变(此时 width 才非 0)
         title.viewTreeObserver.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
@@ -171,11 +189,29 @@ class SetupActivity : AppCompatActivity() {
                 title.invalidate()
             }
         })
+        // 入场:淡入 + 缩放上浮
+        title.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(700)
+            .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        // 泛光呼吸:半径 16↔40,两轮
+        val glow = android.animation.ValueAnimator.ofFloat(16f, 40f).apply {
+            duration = 1200
+            repeatMode = android.animation.ValueAnimator.REVERSE
+            repeatCount = 3
+            addUpdateListener { a ->
+                title.setShadowLayer(a.animatedValue as Float, 0f, 0f, 0x804F8CFF.toInt())
+            }
+        }
+        title.postDelayed({ glow.start() }, 400)
+        // 副标与小字延迟淡入
+        subtitle.animate().alpha(1f).setStartDelay(600).setDuration(500).start()
+        tagline.animate().alpha(1f).setStartDelay(1100).setDuration(600).start()
+        // 3.6s 后整体淡出(glow 动画同时停)
         overlay.postDelayed({
+            glow.cancel()
             overlay.animate().alpha(0f).setDuration(400).withEndAction {
                 root.removeView(overlay)
             }.start()
-        }, 1600)
+        }, 3600)
     }
 
     private fun dp(value: Int): Int =
