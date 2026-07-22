@@ -1,0 +1,13 @@
+[Unit]
+Description=AwesomeMe browser session (matchbox WM + Chrome on :99)
+After=awesome-browser-xvfb.service
+Requires=awesome-browser-xvfb.service
+
+[Service]
+Type=simple
+ExecStart=%h/awesome-browser/run-browser.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

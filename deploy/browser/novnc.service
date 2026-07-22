@@ -1,0 +1,14 @@
+[Unit]
+Description=noVNC web client via websockify (AwesomeMe, tailnet:6080)
+After=x11vnc.service
+Requires=x11vnc.service
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=%h/websockify
+ExecStart=/usr/bin/python3 -m websockify --web %h/novnc-web CHANGE_ME_TAILSCALE_IP:6080 localhost:5900
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -161,6 +161,9 @@ class TerminalActivity : AppCompatActivity(),
 
         /** 桌面标签的完整加载 URL(openDesktopTab 时含 VNC 密码参数)。 */
         var desktopUrl: String? = null
+
+        /** 桌面/浏览器标签的 noVNC 端口(6080=桌面,6081=浏览器),状态行显示用。 */
+        var vncPort: Int = 6080
     }
 
     private lateinit var terminalView: TerminalView
@@ -367,10 +370,11 @@ class TerminalActivity : AppCompatActivity(),
     }
 
     /**
-     * 新建 noVNC 桌面标签:先弹 VNC 密码对话框(EditText 带眼睛切换 + 记住密码勾选,
+     * 新建 noVNC 标签(桌面或浏览器):先弹 VNC 密码对话框(EditText 带眼睛切换 + 记住密码勾选,
      * 默认回填上次密码),确认后用带 password 参数的 URL 直连,免在 noVNC 页面二次输入。
+     * vncPort: 6080=整桌面(Xvfb :0), 6081=远程 Chrome 浏览器(Xvfb :99)。
      */
-    private fun openDesktopTab(machine: Machine? = null) {
+    private fun openDesktopTab(machine: Machine? = null, vncPort: Int = 6080, label: String = "桌面") {
         val mHost: String
         val mPort: Int
         val mToken: String
@@ -384,9 +388,10 @@ class TerminalActivity : AppCompatActivity(),
             mName = machine.name
         }
         showVncPasswordDialog { password ->
-            val tab = Tab(nextTabId++, "桌面", "desktop", null, null, mHost, mPort, mToken, mName, desktop = true)
-            tab.stateText = "noVNC :6080"
-            tab.desktopUrl = "http://$mHost:6080/vnc.html?autoconnect=true&resize=off" +
+            val tab = Tab(nextTabId++, label, "desktop", null, null, mHost, mPort, mToken, mName, desktop = true)
+            tab.vncPort = vncPort
+            tab.stateText = "noVNC :$vncPort"
+            tab.desktopUrl = "http://$mHost:$vncPort/vnc.html?autoconnect=true&resize=off" +
                 "&password=" + URLEncoder.encode(password, Charsets.UTF_8.name())
             tabs.add(tab)
             selectedMachine = tab.machineName
@@ -514,7 +519,7 @@ class TerminalActivity : AppCompatActivity(),
                 // 初始缩放让可视宽度约 2560 CSS px(半宽),横纵滚动定位;
                 // 滚动条常驻,方便用户知道当前位置
                 settings.useWideViewPort = false
-                setInitialScale(desktopInitialScalePct())
+                setInitialScale(desktopInitialScalePct(tab))
                 setScrollbarFadingEnabled(false)
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
                 webViewClient = android.webkit.WebViewClient() // 链接都在本 WebView 内打开
@@ -526,12 +531,14 @@ class TerminalActivity : AppCompatActivity(),
         wv.visibility = View.VISIBLE
     }
 
-    /** 初始缩放百分比:让可视宽度约等于 2560 CSS px(双屏桌面 5120 的半宽)。 */
-    private fun desktopInitialScalePct(): Int {
+    /** 初始缩放百分比:让可视宽度约等于目标 CSS px——
+     *  桌面(6080)取 2560(双屏 5120 的半宽);浏览器(6081)画布 1080x1920,取 1080 正好铺满屏宽。 */
+    private fun desktopInitialScalePct(tab: Tab): Int {
+        val targetCssWidth = if (tab.vncPort == 6081) 1080f else 2560f
         val dm = resources.displayMetrics
         // WebView 的 SCALE_NORMAL(100) 下 CSS px = 物理 px / density
         val cssWidth = dm.widthPixels / dm.density
-        return (cssWidth / 2560f * 100).toInt().coerceIn(15, 100)
+        return (cssWidth / targetCssWidth * 100).toInt().coerceIn(15, 100)
     }
 
     /** 当前选中机器可见的标签(标签栏只画这些)。 */
@@ -727,11 +734,19 @@ class TerminalActivity : AppCompatActivity(),
 
         // 手动处理确定按钮，校验失败时不关闭对话框
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            if (radioApp.checkedRadioButtonId == R.id.dialog_radio_desktop) {
-                // 桌面标签:无需会话名,直接开 noVNC WebView 标签
-                openDesktopTab(selectedMachine())
-                dialog.dismiss()
-                return@setOnClickListener
+            when (radioApp.checkedRadioButtonId) {
+                R.id.dialog_radio_desktop -> {
+                    // 桌面标签:无需会话名,直接开 noVNC WebView 标签
+                    openDesktopTab(selectedMachine(), 6080, getString(R.string.tab_label_desktop))
+                    dialog.dismiss()
+                    return@setOnClickListener
+                }
+                R.id.dialog_radio_browser -> {
+                    // 浏览器标签:同一台机器的 6081 端口(独立 Xvfb :99 上跑全屏 Chrome)
+                    openDesktopTab(selectedMachine(), 6081, getString(R.string.tab_label_browser))
+                    dialog.dismiss()
+                    return@setOnClickListener
+                }
             }
             val app = when (radioApp.checkedRadioButtonId) {
                 R.id.dialog_radio_kimi -> "kimi"
@@ -1487,7 +1502,7 @@ class TerminalActivity : AppCompatActivity(),
         append(tab.label, bright)
         append(" [${tab.app}]", dimmer)
         if (tab.desktop) {
-            append(" @ ${tab.host}:6080", dim)
+            append(" @ ${tab.host}:${tab.vncPort}", dim)
         } else {
             append(" @ ${tab.host}:${tab.port}", dim)
         }

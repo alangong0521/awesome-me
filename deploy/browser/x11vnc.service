@@ -1,0 +1,12 @@
+[Unit]
+Description=x11vnc VNC server for GNOME desktop :1 (AwesomeMe noVNC)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/x11vnc -display :1 -auth %h/.Xauthority -localhost -forever -shared -rfbport 5900 -rfbauth %h/.vnc/passwd -o %h/.vnc/x11vnc.log
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -16,6 +16,9 @@
     <string name="app_claude_c">claude -c（继续上次对话）</string>
     <string name="app_claude_r">claude -r（选择历史会话）</string>
     <string name="app_desktop">桌面（noVNC 远程桌面）</string>
+    <string name="app_browser">浏览器（远程 Chrome）</string>
+    <string name="tab_label_desktop">桌面</string>
+    <string name="tab_label_browser">浏览器</string>
     <string name="app_kimi_c">kimi -c（继续上次对话）</string>
     <string name="app_kimi_r">kimi -r（选择历史会话）</string>
     <string name="hint_session">会话名（可空，自动生成；所有标签都跑在 tmux 会话里）</string>

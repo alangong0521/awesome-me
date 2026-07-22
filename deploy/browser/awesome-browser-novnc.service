@@ -1,0 +1,14 @@
+[Unit]
+Description=AwesomeMe browser noVNC web (websockify 6081 -> 5901)
+After=awesome-browser-x11vnc.service
+Requires=awesome-browser-x11vnc.service
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=%h/websockify
+ExecStart=/usr/bin/python3 -m websockify --web %h/novnc-web CHANGE_ME_TAILSCALE_IP:6081 localhost:5901
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
