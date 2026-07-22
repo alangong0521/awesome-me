@@ -142,6 +142,9 @@ class TerminalActivity : AppCompatActivity(),
 
         /** 桌面标签的 WebView(懒创建,挂在终端容器里,切标签只 show/hide 不销毁)。 */
         var webView: android.webkit.WebView? = null
+
+        /** 桌面标签的完整加载 URL(openDesktopTab 时含 VNC 密码参数)。 */
+        var desktopUrl: String? = null
     }
 
     private lateinit var terminalView: TerminalView
@@ -334,8 +337,8 @@ class TerminalActivity : AppCompatActivity(),
             mToken = machine.token
             mName = machine.name
         }
-        // 标签标题 = 机器名/会话名(如 公司服务器/kimi-2),多机标签一眼可辨,也和 `tmux ls` 对得上
-        val tab = Tab(nextTabId++, "$mName/$sessionName", app, sessionName, null, mHost, mPort, mToken, mName)
+        // 标签标题只用会话名(机器归属由机器栏表达,不再带 "机器名/" 前缀)
+        val tab = Tab(nextTabId++, sessionName, app, sessionName, null, mHost, mPort, mToken, mName)
         tab.session = createSession(tab)
         tabs.add(tab)
         // 新建的标签归属即用户当前想看的:机器栏选中跟随到该机(空态随之解除)
@@ -346,8 +349,8 @@ class TerminalActivity : AppCompatActivity(),
     }
 
     /**
-     * 新建 noVNC 桌面标签:WebView 加载该机器的 6080(noVNC 网页客户端)。
-     * 没有终端会话;VNC 密码由 noVNC 页面提示输入(localStorage 记住),不硬编码在 App 里。
+     * 新建 noVNC 桌面标签:先弹 VNC 密码对话框(EditText 带眼睛切换 + 记住密码勾选,
+     * 默认回填上次密码),确认后用带 password 参数的 URL 直连,免在 noVNC 页面二次输入。
      */
     private fun openDesktopTab(machine: Machine? = null) {
         val mHost: String
@@ -362,13 +365,56 @@ class TerminalActivity : AppCompatActivity(),
             mToken = machine.token
             mName = machine.name
         }
-        val tab = Tab(nextTabId++, "$mName/桌面", "desktop", null, null, mHost, mPort, mToken, mName, desktop = true)
-        tab.stateText = "noVNC :6080"
-        tabs.add(tab)
-        selectedMachine = tab.machineName
-        refreshMachinesBar()
-        updateKeepAlive()
-        switchToTab(tab)
+        showVncPasswordDialog { password ->
+            val tab = Tab(nextTabId++, "桌面", "desktop", null, null, mHost, mPort, mToken, mName, desktop = true)
+            tab.stateText = "noVNC :6080"
+            tab.desktopUrl = "http://$mHost:6080/vnc.html?autoconnect=true&resize=scale" +
+                "&password=" + URLEncoder.encode(password, Charsets.UTF_8.name())
+            tabs.add(tab)
+            selectedMachine = tab.machineName
+            refreshMachinesBar()
+            updateKeepAlive()
+            switchToTab(tab)
+        }
+    }
+
+    /** VNC 密码输入对话框:密码框(眼睛切换明文/密文) + 记住密码勾选。 */
+    private fun showVncPasswordDialog(onConfirm: (String) -> Unit) {
+        val prefs = inboxPrefs()
+        val saved = prefs.getString("vnc_password", "").orEmpty()
+        val til = com.google.android.material.textfield.TextInputLayout(this).apply {
+            endIconMode = com.google.android.material.textfield.TextInputLayout.END_ICON_PASSWORD_TOGGLE
+            hint = getString(R.string.vnc_password_hint)
+        }
+        val edit = com.google.android.material.textfield.TextInputEditText(til.context).apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(saved)
+            setSelection(saved.length)
+        }
+        til.addView(edit)
+        val remember = android.widget.CheckBox(this).apply {
+            text = getString(R.string.vnc_password_remember)
+            isChecked = true
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), 0)
+            addView(til)
+            addView(remember)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.vnc_password_title)
+            .setView(container)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_connect) { _, _ ->
+                val pwd = edit.text?.toString().orEmpty()
+                if (remember.isChecked) {
+                    prefs.edit().putString("vnc_password", pwd).apply()
+                }
+                onConfirm(pwd)
+            }
+            .show()
     }
 
     /** 默认机器（intent 带进来的那台）的显示名：机器列表里查到就用列表名，否则用 host。 */
@@ -447,7 +493,7 @@ class TerminalActivity : AppCompatActivity(),
                 settings.displayZoomControls = false
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
                 webViewClient = android.webkit.WebViewClient() // 链接都在本 WebView 内打开
-                loadUrl("http://${tab.host}:6080/vnc.html?autoconnect=true&resize=scale")
+                loadUrl(tab.desktopUrl ?: "http://${tab.host}:6080/vnc.html?autoconnect=true&resize=scale")
             }
             container.addView(wv)
             tab.webView = wv
@@ -906,6 +952,8 @@ class TerminalActivity : AppCompatActivity(),
                 text = buildString {
                     append(item.name).append("（").append(formatSize(item.size)).append("）\n")
                     append(fmt.format(java.util.Date(item.time))).append(" · ").append(item.machine)
+                    // 已下载的条目把存放路径也显示出来
+                    item.downloadedPath?.let { append('\n').append(it) }
                 }
                 textSize = 13f
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -922,11 +970,12 @@ class TerminalActivity : AppCompatActivity(),
                     text = getString(R.string.action_download)
                     textSize = 12f
                     setOnClickListener {
-                        if (downloadInboxItem(item)) {
-                            FileInbox.markDownloaded(inboxPrefs(), item)
+                        val path = downloadInboxItem(item)
+                        if (path != null) {
+                            FileInbox.markDownloaded(inboxPrefs(), item, path)
                             refreshInboxBadge()
                             it.visibility = View.GONE
-                            info.append(" · ${getString(R.string.inbox_downloaded)}")
+                            info.append(" · ${getString(R.string.inbox_downloaded)}\n$path")
                         }
                     }
                 })
@@ -946,20 +995,32 @@ class TerminalActivity : AppCompatActivity(),
         builder.show()
     }
 
-    /** 用收件箱条目自己的机器三元组下载;成功返回 true。 */
-    private fun downloadInboxItem(item: InboxItem): Boolean {
+    /** 推送下载统一存放子目录(Download/awesome-me/)。 */
+    private fun downloadDestPath(name: String): String =
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).path + "/awesome-me/" + name
+
+    /** 用收件箱条目自己的机器三元组下载;成功返回存放完整路径,失败返回 null。 */
+    private fun downloadInboxItem(item: InboxItem): String? {
         val encodedName = URLEncoder.encode(item.name, Charsets.UTF_8.name()).replace("+", "%20")
         val url = "http://${item.host}:${item.port}/files/$encodedName" +
             "?token=${URLEncoder.encode(item.token, Charsets.UTF_8.name())}"
+        val destPath = downloadDestPath(item.name)
         val request = DownloadManager.Request(Uri.parse(url))
             .setTitle(item.name)
-            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, item.name)
+            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "awesome-me/${item.name}")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
         return runCatching {
             (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
         }.onFailure {
             Toast.makeText(this, getString(R.string.download_failed, it.message ?: ""), Toast.LENGTH_LONG).show()
-        }.isSuccess
+        }.isSuccess.let { ok ->
+            if (ok) {
+                Toast.makeText(this, getString(R.string.download_started, destPath), Toast.LENGTH_LONG).show()
+                destPath
+            } else {
+                null
+            }
+        }
     }
 
     private fun formatSize(size: Long): String = when {
@@ -976,19 +1037,6 @@ class TerminalActivity : AppCompatActivity(),
         val t = tab?.token ?: token
         val encodedName = URLEncoder.encode(name, Charsets.UTF_8.name()).replace("+", "%20")
         return "http://$h:$p/files/$encodedName?token=${URLEncoder.encode(t, Charsets.UTF_8.name())}"
-    }
-
-    /** DownloadManager 写公共 Download 目录，不需要 READ/WRITE 存储权限。 */
-    private fun downloadPushedFile(name: String, tab: Tab?) {
-        val request = DownloadManager.Request(Uri.parse(fileDownloadUrl(name, tab)))
-            .setTitle(name)
-            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-        runCatching {
-            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-        }.onFailure {
-            Toast.makeText(this, getString(R.string.download_failed, it.message ?: ""), Toast.LENGTH_LONG).show()
-        }
     }
 
     /** App 在后台时的提示：系统通知，点击经 DownloadFileReceiver 触发同一个下载。 */
@@ -1111,43 +1159,42 @@ class TerminalActivity : AppCompatActivity(),
         updateModifierButtons()
     }
 
-    /** IME 动画期间冻结的 TerminalView 高度（-1 = 未冻结）。 */
-    private var frozenTermHeight = -1
+    /** TerminalView 的钉住高度（-1 = 尚未量到首次尺寸）。 */
+    private var pinnedTermHeight = -1
     private var lastContainerHeight = -1
 
-    /** 键盘动画稳定后的一次性对齐动作（每次容器高度变化都会重置计时）。 */
+    /** 容器高度稳定 250ms 后的一次性对齐（每次弹/收只触发一次 resize）。 */
     private val imeSettleRunnable = Runnable {
-        if (frozenTermHeight >= 0) {
-            frozenTermHeight = -1
-            // 恢复跟随容器:触发一次 onSizeChanged → updateSize → 单次 resize
-            val lp = terminalView.layoutParams
-            lp.height = android.view.ViewGroup.LayoutParams.MATCH_PARENT
-            terminalView.layoutParams = lp
-        }
+        val lp = terminalView.layoutParams
+        lp.height = findViewById<android.widget.FrameLayout>(R.id.terminal_container).height
+        terminalView.layoutParams = lp
     }
 
     /**
-     * 弹/收键盘"内容不滚动"修复(备选方案 B,已否决 adjustPan——它把键栏盖在键盘下):
-     * adjustResize 下键盘动画会让容器高度逐帧变化,TerminalView 每帧 updateSize →
-     * 本地 emulator 连续重排 = 用户看到的"内容滚动很多行"。这里在容器高度开始变化时
-     * 把 TerminalView 钉死为当前像素高度(底部被键盘盖住,内容原地不动),动画稳定
-     * 250ms 后一次性恢复 MATCH_PARENT —— 整个弹/收过程只触发一次 resize/重排。
+     * 弹/收键盘"内容不滚动"：TerminalView 的高度始终由这里以固定像素钉住，
+     * 键盘动画期间容器逐帧变化都不影响它（底部被键盘遮住/留出，内容原地不动）；
+     * 容器高度稳定 250ms 后才把 TerminalView 一次性对齐到容器高 = 每次弹/收
+     * 只触发一次 resize/重排，两个方向都不滚。
+     * 前版实现为什么没生效：match_parent 让 TerminalView 在同一个 layout pass 里
+     * 随容器同步变化，OnGlobalLayoutListener 触发时高度早已变完，"冻结"从未成立。
      */
     private fun setupImeResizeFreeze() {
         val container = findViewById<android.widget.FrameLayout>(R.id.terminal_container)
         container.viewTreeObserver.addOnGlobalLayoutListener {
             val h = container.height
-            if (h == lastContainerHeight || h <= 0) return@addOnGlobalLayoutListener
-            lastContainerHeight = h
-            if (frozenTermHeight < 0 && terminalView.height > 0 && terminalView.height != h) {
-                // 动画开始:钉住当前高度,TerminalView 不再随容器收缩 → 不触发 updateSize
-                frozenTermHeight = terminalView.height
+            if (h <= 0) return@addOnGlobalLayoutListener
+            if (pinnedTermHeight < 0 && terminalView.height > 0) {
+                // 首次量到尺寸即钉住
+                pinnedTermHeight = terminalView.height
                 val lp = terminalView.layoutParams
-                lp.height = frozenTermHeight
+                lp.height = pinnedTermHeight
                 terminalView.layoutParams = lp
             }
-            container.removeCallbacks(imeSettleRunnable)
-            container.postDelayed(imeSettleRunnable, 250)
+            if (h != lastContainerHeight) {
+                lastContainerHeight = h
+                container.removeCallbacks(imeSettleRunnable)
+                container.postDelayed(imeSettleRunnable, 250)
+            }
         }
     }
 

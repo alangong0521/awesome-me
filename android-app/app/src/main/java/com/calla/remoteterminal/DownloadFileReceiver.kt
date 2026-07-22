@@ -27,8 +27,9 @@ class DownloadFileReceiver : BroadcastReceiver() {
         val name = intent.getStringExtra(EXTRA_NAME)?.takeIf { it.isNotEmpty() } ?: "download"
         val request = DownloadManager.Request(Uri.parse(url))
             .setTitle(name)
-            // DownloadManager 写公共 Download 目录不需要 READ/WRITE 存储权限
-            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
+            // DownloadManager 写公共 Download 目录不需要 READ/WRITE 存储权限;
+            // 统一放 awesome-me 子目录,方便用户找
+            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "awesome-me/$name")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
         runCatching {
             (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)

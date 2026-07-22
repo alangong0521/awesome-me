@@ -6,29 +6,7 @@
     android:background="@color/terminal_bg"
     android:orientation="vertical">
 
-    <!-- 机器栏：已存机器一行横排(可横滑),选中高亮;选中某台机器 → 下方标签栏只显示该机标签 -->
-    <HorizontalScrollView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@color/keybar_bg"
-        android:scrollbars="none">
-
-        <LinearLayout
-            android:id="@+id/machines_container"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:paddingLeft="4dp"
-            android:paddingRight="4dp"
-            android:paddingTop="4dp" />
-    </HorizontalScrollView>
-
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1px"
-        android:background="@color/divider" />
-
-    <!-- 标签栏：每个打开的会话一个标签，右端"+"新建 -->
+    <!-- 机器栏:已存机器一行横排(可横滑),选中高亮;右端固定 + 新建标签 和 ⬇ 收件箱 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -43,7 +21,7 @@
             android:scrollbars="none">
 
             <LinearLayout
-                android:id="@+id/tabs_container"
+                android:id="@+id/machines_container"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
@@ -99,6 +77,29 @@
         android:layout_height="1px"
         android:background="@color/divider" />
 
+    <!-- 标签栏：每个打开的会话一个标签(不带机器名前缀,机器由机器栏表达) -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/keybar_bg"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/tabs_container"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingLeft="4dp"
+            android:paddingRight="4dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp" />
+    </HorizontalScrollView>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1px"
+        android:background="@color/divider" />
+
     <!-- 状态栏：标签名 @ host:port · 连接状态 · 终端标题 -->
     <TextView
         android:id="@+id/status_text"
@@ -147,7 +148,7 @@
             android:visibility="gone" />
     </FrameLayout>
 
-    <!-- 特殊键栏：最终顺序(ESC ⏎ 键盘 ↑ ↓ ← → ⌫ TAB CTRL SHIFT 横屏,共 12 键,ALT 已移除)，
+    <!-- 特殊键栏：最终顺序(⏎ TAB ↑ ↓ ← → ⌫ ESC 键盘 CTRL SHIFT ALT 横屏,共 13 键)，
          栏可横向滚动；id 供代码设置系统手势排除区(防横滑误触切换应用/返回) -->
     <HorizontalScrollView
         android:id="@+id/keybar_scroll"
@@ -167,17 +168,6 @@
             android:paddingBottom="4dp">
 
             <Button
-                android:id="@+id/key_esc"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginHorizontal="3dp"
-                android:backgroundTint="@color/key_background"
-                app:cornerRadius="9dp"
-                android:minWidth="64dp"
-                android:text="ESC"
-                android:textColor="@color/key_text"
-                android:textSize="12sp" />
-            <Button
                 android:id="@+id/key_enter"
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
@@ -189,14 +179,14 @@
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
             <Button
-                android:id="@+id/key_keyboard"
+                android:id="@+id/key_tab"
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
                 android:layout_marginHorizontal="3dp"
                 android:backgroundTint="@color/key_background"
                 app:cornerRadius="9dp"
                 android:minWidth="64dp"
-                android:text="@string/key_keyboard"
+                android:text="TAB"
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
             <Button
@@ -255,14 +245,25 @@
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
             <Button
-                android:id="@+id/key_tab"
+                android:id="@+id/key_esc"
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
                 android:layout_marginHorizontal="3dp"
                 android:backgroundTint="@color/key_background"
                 app:cornerRadius="9dp"
                 android:minWidth="64dp"
-                android:text="TAB"
+                android:text="ESC"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+            <Button
+                android:id="@+id/key_keyboard"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginHorizontal="3dp"
+                android:backgroundTint="@color/key_background"
+                app:cornerRadius="9dp"
+                android:minWidth="64dp"
+                android:text="@string/key_keyboard"
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
             <Button

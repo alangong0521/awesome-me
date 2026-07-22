@@ -91,9 +91,15 @@
     <string name="dialog_file_pushed_message">%1$s（%2$s）</string>
     <string name="action_download">下载</string>
     <string name="download_failed">下载启动失败：%1$s</string>
+    <string name="download_started">下载中，保存到：%1$s</string>
     <string name="file_pushed_toast">收到文件：%1$s</string>
     <string name="inbox_title">推送收件箱</string>
     <string name="inbox_empty">暂无推送记录</string>
     <string name="inbox_clear">清空</string>
     <string name="inbox_downloaded">已下载</string>
+
+    <!-- noVNC 桌面 -->
+    <string name="vnc_password_title">远程桌面密码</string>
+    <string name="vnc_password_hint">VNC 密码</string>
+    <string name="vnc_password_remember">记住密码</string>
 </resources>

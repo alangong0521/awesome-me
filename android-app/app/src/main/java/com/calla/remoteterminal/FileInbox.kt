@@ -14,17 +14,21 @@ data class InboxItem(
     val token: String,
     val machine: String, // 机器显示名
     var downloaded: Boolean,
+    /** 已下载的存放路径(收件箱列表展示用)。 */
+    var downloadedPath: String? = null,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("name", name).put("size", size).put("time", time)
         .put("host", host).put("port", port).put("token", token)
         .put("machine", machine).put("downloaded", downloaded)
+        .put("downloadedPath", downloadedPath)
 
     companion object {
         fun fromJson(o: JSONObject) = InboxItem(
             o.optString("name"), o.optLong("size"), o.optLong("time"),
             o.optString("host"), o.optInt("port", 7681), o.optString("token"),
-            o.optString("machine"), o.optBoolean("downloaded", false)
+            o.optString("machine"), o.optBoolean("downloaded", false),
+            o.optString("downloadedPath").ifEmpty { null }
         )
     }
 }
@@ -64,12 +68,14 @@ object FileInbox {
         return items
     }
 
-    fun markDownloaded(prefs: SharedPreferences, item: InboxItem) {
+    fun markDownloaded(prefs: SharedPreferences, item: InboxItem, path: String?) {
         val items = load(prefs)
         val idx = items.indexOfFirst { it.name == item.name && it.time == item.time }
         if (idx >= 0) {
             items[idx].downloaded = true
+            items[idx].downloadedPath = path
             item.downloaded = true
+            item.downloadedPath = path
             save(prefs, items)
         }
     }
