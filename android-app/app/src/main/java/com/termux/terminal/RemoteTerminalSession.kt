@@ -111,28 +111,16 @@ class RemoteTerminalSession(
     /**
      * resize 去抖（200ms）：软键盘弹起/收起动画、IME 候选栏高度变化会让行数快速抖动，
      * 每次抖动都发 resize 会让 tmux 反复重排重绘。200ms 内无更新才发，期间重置计时。
-     *
-     * 发送前主动清本地屏（裂屏根治）：本地 TerminalEmulator 在键盘动画瞬间就按新行数
-     * 重排（TerminalBuffer.resize 只搬移内容不清屏），而服务端 pty 要等本次 resize 才
-     * 变尺寸——错位期间 tmux 用 diff 增量重绘，基于错误画面推算，陈旧行没人擦
-     * （实测：kimi 输入框画在两个垂直位置、tmux 状态栏两条）。这里在发 resize 的
-     * 同时把本地屏清成空白：之后服务端立即全量 refresh-client（无 diff），画面成为
-     * 纯 tmux 网格的忠实拷贝，残影无处藏身。代价是 ~百 ms 白屏，可接受。
+     * v1.4.2 起**不再发送前清本地屏**——清屏会在每次弹/收键盘时闪黑一下(用户感知
+     * 闪烁);错位期间 tmux 的 diff 增量重绘可能留短暂残影,但服务端 resize 后 150ms
+     * 的 refresh-client 全量重绘兜底(画面最终=纯 tmux 网格),短暂残影比必现闪黑温和。
      */
     private val resizeDebounceRunnable = Runnable {
         if (open && !destroyed.get()) {
-            clearLocalScreen()
             webSocket?.send(
                 JSONObject().put("type", "resize").put("cols", lastCols).put("rows", lastRows).toString()
             )
         }
-    }
-
-    /** 把本地 emulator 可视区清成空白格并触发重绘（本 Runnable 已在主线程，直接操作）。 */
-    private fun clearLocalScreen() {
-        val emulator = session.mEmulator ?: return
-        emulator.screen.blockSet(0, 0, emulator.mColumns, emulator.mRows, ' '.code, TextStyle.NORMAL)
-        client.onTextChanged(session)
     }
 
     /** 抽干线程在断线期间挂起的等待锁；onOpen/close/destroy 时 notifyAll 唤醒。 */

@@ -72,6 +72,11 @@ class SetupActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
+        // 开屏欢迎页:1.5s 后隐藏(不阻塞登录页可用)
+        findViewById<View>(R.id.splash_overlay).postDelayed({
+            findViewById<View>(R.id.splash_overlay).visibility = View.GONE
+        }, 1500)
+
         // 副标题尾部追加版本号:让用户一眼确认装的是不是最新版
         findViewById<android.widget.TextView>(R.id.setup_subtitle).text =
             getString(R.string.setup_subtitle) + "  ·  v" + BuildConfig.VERSION_NAME

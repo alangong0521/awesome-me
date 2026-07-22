@@ -78,12 +78,13 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/sessions') {
     const tmuxBin = (config.apps.tmux && config.apps.tmux[0]) || 'tmux';
     require('child_process').execFile(tmuxBin,
-      ['ls', '-F', '#{session_name}\t#{session_windows}\t#{?session_attached,1,0}'],
+      ['ls', '-F', '#{session_name}\t#{session_windows}\t#{?session_attached,1,0}\t#{session_activity}\t#{session_created}'],
       (err, stdout) => {
         const sessions = err ? [] : stdout.trim().split('\n').filter(Boolean).map(l => {
-          const [name, windows, attached] = l.split('\t');
-          return { name, windows: +windows || 1, attached: attached === '1' };
-        });
+          const [name, windows, attached, activity, created] = l.split('\t');
+          return { name, windows: +windows || 1, attached: attached === '1',
+                   activity: +activity || 0, created: +created || 0 };
+        }).sort((a, b) => b.activity - a.activity);
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ sessions }));
       });
     return;

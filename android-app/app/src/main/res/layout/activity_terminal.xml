@@ -148,155 +148,94 @@
             android:visibility="gone" />
     </FrameLayout>
 
-    <!-- 特殊键栏：最终顺序(⏎ TAB ↑ ↓ ← → ⌫ ESC 键盘 CTRL SHIFT ALT 横屏,共 13 键)，
-         栏可横向滚动；id 供代码设置系统手势排除区(防横滑误触切换应用/返回) -->
-    <HorizontalScrollView
-        android:id="@+id/keybar_scroll"
+    <!-- 特殊键栏(两行):第一行 ⏎ TAB ↑ ↓ ← →(均分铺满)+ 横竖屏 Fn;
+         第二行 ESC ⌫ CTRL SHIFT ALT F1 F2 键盘(均分)。容器 id 供手势排除区用 -->
+    <LinearLayout
+        android:id="@+id/keybar_container"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginBottom="8dp"
         android:background="@color/keybar_bg"
-        android:scrollbars="none">
+        android:orientation="vertical"
+        android:paddingLeft="4dp"
+        android:paddingRight="4dp"
+        android:paddingTop="4dp">
 
         <LinearLayout
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:paddingLeft="4dp"
-            android:paddingRight="4dp"
-            android:paddingTop="4dp"
-            android:paddingBottom="4dp">
+            android:orientation="horizontal">
 
             <Button
                 android:id="@+id/key_enter"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="36dp"
                 android:layout_marginHorizontal="3dp"
                 android:backgroundTint="@color/key_background"
                 app:cornerRadius="9dp"
-                android:minWidth="64dp"
+                android:minWidth="0dp"
                 android:text="⏎"
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
             <Button
                 android:id="@+id/key_tab"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="36dp"
                 android:layout_marginHorizontal="3dp"
                 android:backgroundTint="@color/key_background"
                 app:cornerRadius="9dp"
-                android:minWidth="64dp"
+                android:minWidth="0dp"
                 android:text="TAB"
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
             <Button
                 android:id="@+id/key_up"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="36dp"
                 android:layout_marginHorizontal="3dp"
                 android:backgroundTint="@color/key_background"
                 app:cornerRadius="9dp"
-                android:minWidth="56dp"
+                android:minWidth="0dp"
                 android:text="↑"
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
             <Button
                 android:id="@+id/key_down"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="36dp"
                 android:layout_marginHorizontal="3dp"
                 android:backgroundTint="@color/key_background"
                 app:cornerRadius="9dp"
-                android:minWidth="56dp"
+                android:minWidth="0dp"
                 android:text="↓"
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
             <Button
                 android:id="@+id/key_left"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="36dp"
                 android:layout_marginHorizontal="3dp"
                 android:backgroundTint="@color/key_background"
                 app:cornerRadius="9dp"
-                android:minWidth="56dp"
+                android:minWidth="0dp"
                 android:text="←"
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
             <Button
                 android:id="@+id/key_right"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="36dp"
                 android:layout_marginHorizontal="3dp"
                 android:backgroundTint="@color/key_background"
                 app:cornerRadius="9dp"
-                android:minWidth="56dp"
+                android:minWidth="0dp"
                 android:text="→"
-                android:textColor="@color/key_text"
-                android:textSize="12sp" />
-            <Button
-                android:id="@+id/key_backspace"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginHorizontal="3dp"
-                android:backgroundTint="@color/key_background"
-                app:cornerRadius="9dp"
-                android:minWidth="56dp"
-                android:text="⌫"
-                android:textColor="@color/key_text"
-                android:textSize="12sp" />
-            <Button
-                android:id="@+id/key_esc"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginHorizontal="3dp"
-                android:backgroundTint="@color/key_background"
-                app:cornerRadius="9dp"
-                android:minWidth="64dp"
-                android:text="ESC"
-                android:textColor="@color/key_text"
-                android:textSize="12sp" />
-            <Button
-                android:id="@+id/key_keyboard"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginHorizontal="3dp"
-                android:backgroundTint="@color/key_background"
-                app:cornerRadius="9dp"
-                android:minWidth="64dp"
-                android:text="@string/key_keyboard"
-                android:textColor="@color/key_text"
-                android:textSize="12sp" />
-            <Button
-                android:id="@+id/key_ctrl"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginHorizontal="3dp"
-                android:backgroundTint="@color/key_background"
-                app:cornerRadius="9dp"
-                android:minWidth="64dp"
-                android:text="CTRL"
-                android:textColor="@color/key_text"
-                android:textSize="12sp" />
-            <Button
-                android:id="@+id/key_shift"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginHorizontal="3dp"
-                android:backgroundTint="@color/key_background"
-                app:cornerRadius="9dp"
-                android:minWidth="64dp"
-                android:text="SHIFT"
-                android:textColor="@color/key_text"
-                android:textSize="12sp" />
-            <Button
-                android:id="@+id/key_alt"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:layout_marginHorizontal="3dp"
-                android:backgroundTint="@color/key_background"
-                app:cornerRadius="9dp"
-                android:minWidth="64dp"
-                android:text="ALT"
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
             <Button
@@ -306,12 +245,126 @@
                 android:layout_marginHorizontal="3dp"
                 android:backgroundTint="@color/key_background"
                 app:cornerRadius="9dp"
-                android:minWidth="64dp"
+                android:minWidth="0dp"
                 android:text="@string/key_to_landscape"
                 android:textColor="@color/key_text"
                 android:textSize="12sp" />
-
+            <Button
+                android:id="@+id/key_fn"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginHorizontal="3dp"
+                android:backgroundTint="@color/key_background"
+                app:cornerRadius="9dp"
+                android:minWidth="0dp"
+                android:text="Fn"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
         </LinearLayout>
-    </HorizontalScrollView>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingBottom="4dp">
+
+            <Button
+                android:id="@+id/key_esc"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="36dp"
+                android:layout_marginHorizontal="3dp"
+                android:backgroundTint="@color/key_background"
+                app:cornerRadius="9dp"
+                android:minWidth="0dp"
+                android:text="ESC"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+            <Button
+                android:id="@+id/key_backspace"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="36dp"
+                android:layout_marginHorizontal="3dp"
+                android:backgroundTint="@color/key_background"
+                app:cornerRadius="9dp"
+                android:minWidth="0dp"
+                android:text="⌫"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+            <Button
+                android:id="@+id/key_ctrl"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="36dp"
+                android:layout_marginHorizontal="3dp"
+                android:backgroundTint="@color/key_background"
+                app:cornerRadius="9dp"
+                android:minWidth="0dp"
+                android:text="CTRL"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+            <Button
+                android:id="@+id/key_shift"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="36dp"
+                android:layout_marginHorizontal="3dp"
+                android:backgroundTint="@color/key_background"
+                app:cornerRadius="9dp"
+                android:minWidth="0dp"
+                android:text="SHIFT"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+            <Button
+                android:id="@+id/key_alt"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="36dp"
+                android:layout_marginHorizontal="3dp"
+                android:backgroundTint="@color/key_background"
+                app:cornerRadius="9dp"
+                android:minWidth="0dp"
+                android:text="ALT"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+            <Button
+                android:id="@+id/key_f1"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="36dp"
+                android:layout_marginHorizontal="3dp"
+                android:backgroundTint="@color/key_background"
+                app:cornerRadius="9dp"
+                android:minWidth="0dp"
+                android:text="F1"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+            <Button
+                android:id="@+id/key_f2"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="36dp"
+                android:layout_marginHorizontal="3dp"
+                android:backgroundTint="@color/key_background"
+                app:cornerRadius="9dp"
+                android:minWidth="0dp"
+                android:text="F2"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+            <Button
+                android:id="@+id/key_keyboard"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="36dp"
+                android:layout_marginHorizontal="3dp"
+                android:backgroundTint="@color/key_background"
+                app:cornerRadius="9dp"
+                android:minWidth="0dp"
+                android:text="@string/key_keyboard"
+                android:textColor="@color/key_text"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
 
 </LinearLayout>

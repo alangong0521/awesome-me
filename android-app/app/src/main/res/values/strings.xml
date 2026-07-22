@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AwesomeMe</string>
+    <string name="splash_credit">nio-cva团队开发，仅供cva团队使用</string>
 
     <!-- SetupActivity -->
     <string name="setup_subtitle">从手机远程操作 Mac 上的终端程序</string>
@@ -97,6 +98,11 @@
     <string name="inbox_empty">暂无推送记录</string>
     <string name="inbox_clear">清空</string>
     <string name="inbox_downloaded">已下载</string>
+
+    <!-- 新建 shell 选择 -->
+    <string name="shell_new_title">新建 shell</string>
+    <string name="shell_resume_pick">接续上一个 shell（%1$s）</string>
+    <string name="shell_fresh">全新 shell</string>
 
     <!-- noVNC 桌面 -->
     <string name="vnc_password_title">远程桌面密码</string>

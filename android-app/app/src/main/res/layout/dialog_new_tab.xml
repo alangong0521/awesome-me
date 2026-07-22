@@ -25,6 +25,27 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="8dp" />
 
+        <!-- 接入已有会话：打开对话框时异步 GET /sessions，结果动态塞进 container -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/label_existing_sessions"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/dialog_sessions_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/sessions_loading" />
+
+        <LinearLayout
+            android:id="@+id/dialog_sessions_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
         <RadioGroup
             android:id="@+id/dialog_radio_app"
             android:layout_width="match_parent"
@@ -103,26 +124,7 @@
                 android:singleLine="true" />
         </com.google.android.material.textfield.TextInputLayout>
 
-        <!-- 接入已有会话：打开对话框时异步 GET /sessions，结果动态塞进 container -->
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/label_existing_sessions"
-            android:textStyle="bold" />
 
-        <TextView
-            android:id="@+id/dialog_sessions_status"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/sessions_loading" />
-
-        <LinearLayout
-            android:id="@+id/dialog_sessions_container"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical" />
 
     </LinearLayout>
 </ScrollView>

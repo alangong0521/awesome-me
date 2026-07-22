@@ -98,6 +98,22 @@ class TerminalActivity : AppCompatActivity(),
         private const val FILE_CHANNEL_ID = "file_push"
         private const val REQ_POST_NOTIFICATIONS = 1
 
+        // noVNC 键盘注入用的 DOM KeyboardEvent.code(注入方式见 sendDesktopKeysym)
+        private const val XK_ENTER = "Enter"
+        private const val XK_ESCAPE = "Escape"
+        private const val XK_TAB = "Tab"
+        private const val XK_BACKSPACE = "Backspace"
+        private const val XK_UP = "ArrowUp"
+        private const val XK_DOWN = "ArrowDown"
+        private const val XK_LEFT = "ArrowLeft"
+        private const val XK_RIGHT = "ArrowRight"
+        private const val XK_HOME = "Home"
+        private const val XK_END = "End"
+        private const val XK_PRIOR = "PageUp"
+        private const val XK_NEXT = "PageDown"
+        private const val XK_F1 = "F1"
+        private const val XK_F2 = "F2"
+
         /** 文件推送去重窗口：同一 name|size 在该窗口内（多标签同时收到同一广播）只提示一次。 */
         private const val PUSH_DEDUPE_WINDOW_MS = 10_000L
 
@@ -170,6 +186,7 @@ class TerminalActivity : AppCompatActivity(),
     private var stickyCtrl = false
     private var stickyShift = false
     private var stickyAlt = false
+    private var stickyFn = false
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var baseFontPx = 0
     private var termTitle: String? = null
@@ -177,6 +194,7 @@ class TerminalActivity : AppCompatActivity(),
     private lateinit var orientationButton: Button
     private lateinit var shiftButton: Button
     private lateinit var altButton: Button
+    private lateinit var fnButton: Button
 
     /** 拉取服务端活 tmux 会话列表用（新建标签对话框的"接入已有会话"）。 */
     private val httpClient = OkHttpClient.Builder()
@@ -368,7 +386,7 @@ class TerminalActivity : AppCompatActivity(),
         showVncPasswordDialog { password ->
             val tab = Tab(nextTabId++, "桌面", "desktop", null, null, mHost, mPort, mToken, mName, desktop = true)
             tab.stateText = "noVNC :6080"
-            tab.desktopUrl = "http://$mHost:6080/vnc.html?autoconnect=true&resize=scale" +
+            tab.desktopUrl = "http://$mHost:6080/vnc.html?autoconnect=true&resize=off" +
                 "&password=" + URLEncoder.encode(password, Charsets.UTF_8.name())
             tabs.add(tab)
             selectedMachine = tab.machineName
@@ -487,18 +505,33 @@ class TerminalActivity : AppCompatActivity(),
                 )
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true // noVNC 用 localStorage 记 VNC 密码等设置
-                settings.useWideViewPort = true
-                settings.loadWithOverviewMode = true
+                settings.loadWithOverviewMode = false
+                // 双指捏合整页缩放(内建);单指触摸仍透传给 noVNC 当鼠标
+                settings.setSupportZoom(true)
                 settings.builtInZoomControls = true
                 settings.displayZoomControls = false
+                // 默认视野:桌面 URL 用 resize=off(画布原生分辨率,5120x1440 双屏),
+                // 初始缩放让可视宽度约 2560 CSS px(半宽),横纵滚动定位;
+                // 滚动条常驻,方便用户知道当前位置
+                settings.useWideViewPort = false
+                setInitialScale(desktopInitialScalePct())
+                setScrollbarFadingEnabled(false)
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
                 webViewClient = android.webkit.WebViewClient() // 链接都在本 WebView 内打开
-                loadUrl(tab.desktopUrl ?: "http://${tab.host}:6080/vnc.html?autoconnect=true&resize=scale")
+                loadUrl(tab.desktopUrl ?: "http://${tab.host}:6080/vnc.html?autoconnect=true&resize=off")
             }
             container.addView(wv)
             tab.webView = wv
         }
         wv.visibility = View.VISIBLE
+    }
+
+    /** 初始缩放百分比:让可视宽度约等于 2560 CSS px(双屏桌面 5120 的半宽)。 */
+    private fun desktopInitialScalePct(): Int {
+        val dm = resources.displayMetrics
+        // WebView 的 SCALE_NORMAL(100) 下 CSS px = 物理 px / density
+        val cssWidth = dm.widthPixels / dm.density
+        return (cssWidth / 2560f * 100).toInt().coerceIn(15, 100)
     }
 
     /** 当前选中机器可见的标签(标签栏只画这些)。 */
@@ -535,13 +568,16 @@ class TerminalActivity : AppCompatActivity(),
     private fun switchToTab(tab: Tab) {
         // 从空态恢复:终端区显示回来
         emptyHint.visibility = View.GONE
-        // 桌面标签:显示自己的 WebView,藏 TerminalView;普通标签反之
+        // 桌面标签:显示自己的 WebView;TerminalView 用 alpha=0 隐藏但保持 VISIBLE
+        // (INVISIBLE/GONE 会丢 IME 输入连接,桌面标签的"键盘"按钮就弹不出软键盘)
         val container = findViewById<android.widget.FrameLayout>(R.id.terminal_container)
         if (tab.desktop) {
-            terminalView.visibility = View.GONE
+            terminalView.visibility = View.VISIBLE
+            terminalView.alpha = 0f
             showDesktop(tab, container)
         } else {
             for (t in tabs) t.webView?.visibility = View.GONE
+            terminalView.alpha = 1f
             terminalView.visibility = View.VISIBLE
         }
         if (currentTab === tab) {
@@ -663,6 +699,9 @@ class TerminalActivity : AppCompatActivity(),
             return if (pos in 1..machines.size) machines[pos - 1] else null
         }
 
+        /** 最近一次 /sessions 拉到的 (name, attached) 列表(shell 接续选择用)。 */
+        var lastSessions = listOf<Pair<String, Boolean>>()
+
         // 接入已有会话:按选中机器异步拉它的 tmux 会话列表,切换机器时重新拉;
         // 请求失败/为空只在区域内提示"无可用会话",不阻塞手动新建
         fun refetchSessions() {
@@ -673,7 +712,8 @@ class TerminalActivity : AppCompatActivity(),
             val h = m?.host ?: host
             val p = m?.port?.toIntOrNull() ?: port
             val t = m?.token ?: token
-            fetchTmuxSessions(h, p, t, sessionsStatus, sessionsContainer) { name ->
+            fetchTmuxSessions(h, p, t, sessionsStatus, sessionsContainer,
+                onListParsed = { lastSessions = it }) { name ->
                 openTab("tmux", name, m)
                 dialog.dismiss()
             }
@@ -709,6 +749,25 @@ class TerminalActivity : AppCompatActivity(),
                 sessionEdit.error = getString(R.string.error_session_invalid)
                 return@setOnClickListener
             }
+            // 新建 shell 且没填会话名时:若有"最近活跃但未连接"的 shell-* 会话,
+            // 给用户两个选择——接续它,或全新 shell
+            if (app == "shell" && typed.isEmpty()) {
+                val resume = lastSessions.firstOrNull { it.first.startsWith("shell-") && !it.second }
+                if (resume != null) {
+                    MaterialAlertDialogBuilder(this)
+                        .setTitle(R.string.shell_new_title)
+                        .setPositiveButton(getString(R.string.shell_resume_pick, resume.first)) { _, _ ->
+                            openTab("tmux", resume.first, selectedMachine())
+                            dialog.dismiss()
+                        }
+                        .setNegativeButton(R.string.shell_fresh) { _, _ ->
+                            openTab("shell", null, selectedMachine())
+                            dialog.dismiss()
+                        }
+                        .show()
+                    return@setOnClickListener
+                }
+            }
             openTab(app, typed.ifEmpty { null }, selectedMachine())
             dialog.dismiss()
         }
@@ -717,7 +776,9 @@ class TerminalActivity : AppCompatActivity(),
     /** GET /sessions 列出指定机器的活 tmux 会话；每项一个按钮，点按即开标签接入（app=tmux + session=名）。 */
     private fun fetchTmuxSessions(
         mHost: String, mPort: Int, mToken: String,
-        status: TextView, container: LinearLayout, onPick: (String) -> Unit
+        status: TextView, container: LinearLayout,
+        onListParsed: ((List<Pair<String, Boolean>>) -> Unit)? = null,
+        onPick: (String) -> Unit
     ) {
         val url = "http://$mHost:$mPort/sessions?token=${URLEncoder.encode(mToken, Charsets.UTF_8.name())}"
         httpClient.newCall(Request.Builder().url(url).build()).enqueue(object : Callback {
@@ -727,18 +788,27 @@ class TerminalActivity : AppCompatActivity(),
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     var added = 0
+                    val parsed = ArrayList<Pair<String, Boolean>>()
                     try {
                         val arr = JSONObject(body).getJSONArray("sessions")
                         for (i in 0 until arr.length()) {
                             val o = arr.getJSONObject(i)
                             val name = o.optString("name").trim()
+                            if (name.isNotEmpty()) parsed += name to o.optBoolean("attached", false)
+                        }
+                        // 服务端已按 activity 倒序,只取最近活跃的 5 个
+                        val n = minOf(arr.length(), 5)
+                        for (i in 0 until n) {
+                            val o = arr.getJSONObject(i)
+                            val name = o.optString("name").trim()
                             if (name.isEmpty()) continue
                             val attached = o.optBoolean("attached", false)
+                            val activity = o.optLong("activity", 0L)
                             container.addView(Button(this@TerminalActivity).apply {
-                                text = if (attached) {
-                                    getString(R.string.sessions_item_attached, name)
-                                } else {
-                                    name
+                                text = buildString {
+                                    append(name)
+                                    if (activity > 0) append(" · ").append(relativeTime(activity))
+                                    if (attached) append(" · 已接入")
                                 }
                                 isAllCaps = false
                                 setOnClickListener { onPick(name) }
@@ -748,6 +818,7 @@ class TerminalActivity : AppCompatActivity(),
                     } catch (t: Throwable) {
                         // 响应异常视同无会话，下面统一显示提示
                     }
+                    onListParsed?.invoke(parsed)
                     if (added == 0) {
                         status.setText(R.string.sessions_none)
                     } else {
@@ -762,6 +833,17 @@ class TerminalActivity : AppCompatActivity(),
                 }
             }
         })
+    }
+
+    /** epoch 秒 → "x 分钟/小时/天前活跃"。 */
+    private fun relativeTime(epochSec: Long): String {
+        val diff = System.currentTimeMillis() / 1000 - epochSec
+        return when {
+            diff < 60 -> "刚刚活跃"
+            diff < 3600 -> "${diff / 60} 分钟前活跃"
+            diff < 86400 -> "${diff / 3600} 小时前活跃"
+            else -> "${diff / 86400} 天前活跃"
+        }
     }
 
     /** 标签栏重绘：只画当前选中机器的标签；当前标签 = 亮底+primary 描边；已断开加 ✕、重连中加 ↻ 前缀。 */
@@ -1115,27 +1197,32 @@ class TerminalActivity : AppCompatActivity(),
 
     private fun setupExtraKeys() {
         // 底栏功能键统一走 sendBarKey/sendArrowKeyWithMods:粘滞 ALT/CTRL/SHIFT 对其生效
-        // (v1.3.7 前这些键直发字节,绕过 onCodePoint,ALT+⏎ 等组合根本到不了被控端)
+        // (v1.3.7 前这些键直发字节,绕过 onCodePoint,ALT+⏎ 等组合根本到不了被控端);
+        // 桌面标签(noVNC)时改走 JS 注入(见 sendDesktopKeysym)。
         findViewById<Button>(R.id.key_enter).setOnClickListener {
             // ⏎:裸 0x0D;SHIFT+⏎ = CSI-u(实测 kimi 换行);CTRL+⏎ = C-j(实测也换行)
-            sendBarKey(
-                byteArrayOf(0x0D),
-                ctrl = byteArrayOf(0x0A),
-                shift = "\u001B[13;2u".toByteArray()
-            )
+            sendKeyOrDesktop(byteArrayOf(0x0D), XK_ENTER,
+                ctrl = byteArrayOf(0x0A), shift = "\u001B[13;2u".toByteArray())
         }
         findViewById<Button>(R.id.key_esc).setOnClickListener {
-            sendBarKey(byteArrayOf(0x1B))
+            sendKeyOrDesktop(byteArrayOf(0x1B), XK_ESCAPE)
         }
         findViewById<Button>(R.id.key_up).setOnClickListener { sendArrowKeyWithMods(KeyEvent.KEYCODE_DPAD_UP) }
         findViewById<Button>(R.id.key_down).setOnClickListener { sendArrowKeyWithMods(KeyEvent.KEYCODE_DPAD_DOWN) }
         findViewById<Button>(R.id.key_backspace).setOnClickListener {
-            sendBarKey(byteArrayOf(0x7F), ctrl = byteArrayOf(0x08))
+            sendKeyOrDesktop(byteArrayOf(0x7F), XK_BACKSPACE, ctrl = byteArrayOf(0x08))
         }
         findViewById<Button>(R.id.key_left).setOnClickListener { sendArrowKeyWithMods(KeyEvent.KEYCODE_DPAD_LEFT) }
         findViewById<Button>(R.id.key_right).setOnClickListener { sendArrowKeyWithMods(KeyEvent.KEYCODE_DPAD_RIGHT) }
         findViewById<Button>(R.id.key_tab).setOnClickListener {
-            sendBarKey(byteArrayOf(0x09))
+            sendKeyOrDesktop(byteArrayOf(0x09), XK_TAB)
+        }
+        // F1/F2 = SS3 序列(Hacker's Keyboard 风格);桌面标签注入对应 keysym
+        findViewById<Button>(R.id.key_f1).setOnClickListener {
+            sendKeyOrDesktop("\u001BOP".toByteArray(), XK_F1)
+        }
+        findViewById<Button>(R.id.key_f2).setOnClickListener {
+            sendKeyOrDesktop("\u001BOQ".toByteArray(), XK_F2)
         }
         // CTRL/SHIFT/ALT 三个"粘滞"修饰键:点一下点亮,下一个字符带修饰;再点取消。
         // CTRL 走 Termux 默认控制字符映射(readControlKey);SHIFT/ALT 在 onCodePoint 手工实现。
@@ -1153,10 +1240,54 @@ class TerminalActivity : AppCompatActivity(),
             stickyAlt = !stickyAlt
             updateModifierButtons()
         }
+        // Fn 粘滞:点亮后下一次按方向键变 Home/End/PgUp/PgDn,按一次自动熄灭
+        fnButton = findViewById(R.id.key_fn)
+        fnButton.setOnClickListener {
+            stickyFn = !stickyFn
+            updateModifierButtons()
+        }
         findViewById<Button>(R.id.key_keyboard).setOnClickListener { toggleSoftKeyboard() }
         orientationButton = findViewById(R.id.key_orientation)
         orientationButton.setOnClickListener { toggleOrientation() }
         updateModifierButtons()
+    }
+
+    /** 方向键的修饰版:无修饰走 KeyHandler(DECCKM 感知);Fn → Home/End/PgUp/PgDn;
+     *  CTRL → CSI 1;5X(词移动);ALT 由 sendBarKey 前置;桌面标签走 JS 注入。 */
+    private fun sendArrowKeyWithMods(keyCode: Int) {
+        if (stickyFn) {
+            stickyFn = false
+            updateModifierButtons()
+            val (seq, keysym) = when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> "\u001B[5~".toByteArray() to XK_PRIOR   // PgUp
+                KeyEvent.KEYCODE_DPAD_DOWN -> "\u001B[6~".toByteArray() to XK_NEXT  // PgDn
+                KeyEvent.KEYCODE_DPAD_LEFT -> "\u001B[1~".toByteArray() to XK_HOME
+                else -> "\u001B[4~".toByteArray() to XK_END
+            }
+            sendKeyOrDesktop(seq, keysym)
+            return
+        }
+        val emulator = terminalView.mEmulator ?: return
+        val base = KeyHandler.getCode(
+            keyCode, 0, emulator.isCursorKeysApplicationMode, emulator.isKeypadApplicationMode
+        )?.toByteArray() ?: return
+        val (letter, keysym) = when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP -> 'A' to XK_UP
+            KeyEvent.KEYCODE_DPAD_DOWN -> 'B' to XK_DOWN
+            KeyEvent.KEYCODE_DPAD_RIGHT -> 'C' to XK_RIGHT
+            else -> 'D' to XK_LEFT
+        }
+        sendKeyOrDesktop(base, keysym, ctrl = "\u001B[1;5$letter".toByteArray())
+    }
+
+    /** 终端走字节流 / 桌面(noVNC)走 JS 注入 的统一入口。 */
+    private fun sendKeyOrDesktop(base: ByteArray, domCode: String, ctrl: ByteArray? = null, shift: ByteArray? = null) {
+        if (currentTab?.desktop == true) {
+            // 桌面标签:修饰键暂不支持组合,直接发基础键(注释说明,避免误以为生效)
+            sendDesktopKeysym(domCode)
+            return
+        }
+        sendBarKey(base, ctrl, shift)
     }
 
     /** TerminalView 的钉住高度（-1 = 尚未量到首次尺寸）。 */
@@ -1193,7 +1324,7 @@ class TerminalActivity : AppCompatActivity(),
             if (h != lastContainerHeight) {
                 lastContainerHeight = h
                 container.removeCallbacks(imeSettleRunnable)
-                container.postDelayed(imeSettleRunnable, 250)
+                container.postDelayed(imeSettleRunnable, 150)
             }
         }
     }
@@ -1209,7 +1340,7 @@ class TerminalActivity : AppCompatActivity(),
      */
     private fun setupKeybarGestureExclusion() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return // API 29 以下无此 API，空实现
-        val keybar = findViewById<HorizontalScrollView>(R.id.keybar_scroll)
+        val keybar = findViewById<LinearLayout>(R.id.keybar_container)
         keybar.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
             v.systemGestureExclusionRects = listOf(Rect(0, 0, v.width, v.height))
         }
@@ -1228,6 +1359,47 @@ class TerminalActivity : AppCompatActivity(),
             ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
         orientationButton.setText(if (toLandscape) R.string.key_to_portrait else R.string.key_to_landscape)
+    }
+
+    /**
+     * 向当前桌面标签的 noVNC 注入一次按键。
+     * 为什么不走 UI.rfb.sendKey:noVNC 1.3 的 UI 是 ES module 局部变量,window.UI 不存在;
+     * 但 noVNC 的键盘监听挂在 canvas 的 keydown/keyup 上(core/input/keyboard.js),
+     * 派发自带 code 的 KeyboardEvent 与真实按键等效(合成事件同样触发监听器)。
+     */
+    private fun sendDesktopKeysym(domCode: String) {
+        val wv = currentTab?.webView ?: return
+        val js = "(()=>{const cs=document.querySelectorAll('#noVNC_container canvas');" +
+            "const c=cs.length?cs[cs.length-1]:document.querySelector('canvas');" +
+            "if(!c)return 'nocanvas';" +
+            "const o={code:'$domCode',key:'$domCode',bubbles:true,cancelable:true};" +
+            "c.dispatchEvent(new KeyboardEvent('keydown',o));" +
+            "c.dispatchEvent(new KeyboardEvent('keyup',o));" +
+            "return 0;})()"
+        wv.evaluateJavascript(js, null)
+    }
+
+    /** 软键盘输入的文本码点注入 noVNC(尽量给标准 code,其他字符只给 key)。 */
+    private fun sendDesktopChar(codePoint: Int) {
+        val ch = String(Character.toChars(codePoint))
+        val code = when (ch) {
+            " " -> "Space"
+            in "a".."z", in "A".."Z" -> "Key" + ch.uppercase()
+            in "0".."9" -> "Digit$ch"
+            "-" -> "Minus"; "=" -> "Equal"; "," -> "Comma"; "." -> "Period"
+            "/" -> "Slash"; "\\" -> "Backslash"; ";" -> "Semicolon"; "'" -> "Quote"
+            "[" -> "BracketLeft"; "]" -> "BracketRight"; "`" -> "Backquote"
+            else -> ""
+        }
+        val wv = currentTab?.webView ?: return
+        val js = "(()=>{const cs=document.querySelectorAll('#noVNC_container canvas');" +
+            "const c=cs.length?cs[cs.length-1]:document.querySelector('canvas');" +
+            "if(!c)return 'nocanvas';" +
+            "const o={code:'$code',key:'${ch.replace("'", "\\'")}',bubbles:true,cancelable:true};" +
+            "c.dispatchEvent(new KeyboardEvent('keydown',o));" +
+            "c.dispatchEvent(new KeyboardEvent('keyup',o));" +
+            "return 0;})()"
+        wv.evaluateJavascript(js, null)
     }
 
     /**
@@ -1253,21 +1425,6 @@ class TerminalActivity : AppCompatActivity(),
         rs.sendUserInput(payload)
     }
 
-    /** 方向键的修饰版:无修饰走 KeyHandler(DECCKM 感知);CTRL → CSI 1;5X(词移动);ALT 由 sendBarKey 前置。 */
-    private fun sendArrowKeyWithMods(keyCode: Int) {
-        val emulator = terminalView.mEmulator ?: return
-        val base = KeyHandler.getCode(
-            keyCode, 0, emulator.isCursorKeysApplicationMode, emulator.isKeypadApplicationMode
-        )?.toByteArray() ?: return
-        val letter = when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_UP -> 'A'
-            KeyEvent.KEYCODE_DPAD_DOWN -> 'B'
-            KeyEvent.KEYCODE_DPAD_RIGHT -> 'C'
-            else -> 'D'
-        }
-        sendBarKey(base, ctrl = "\u001B[1;5$letter".toByteArray())
-    }
-
     /**
      * 方向键序列随"应用光标键模式"(DECCKM)切换（如全屏 TUI 开启后应发 \033OA 等），
      * 与 TerminalView 处理硬件方向键的路径一致，走 KeyHandler。
@@ -1280,14 +1437,15 @@ class TerminalActivity : AppCompatActivity(),
         currentTab?.session?.sendUserInput(code)
     }
 
-    /** CTRL/SHIFT/ALT 粘滞修饰键统一点亮/熄灭（点亮 = primary 蓝填充 + 白字，更醒目）。 */
+    /** CTRL/SHIFT/ALT/Fn 粘滞修饰键统一点亮/熄灭（点亮 = primary 蓝填充 + 白字，更醒目）。 */
     private fun updateModifierButtons() {
         val active = ContextCompat.getColorStateList(this, R.color.ctrl_active)
         val normal = ContextCompat.getColorStateList(this, R.color.key_background)
         val white = ContextCompat.getColor(this, android.R.color.white)
         val keyText = ContextCompat.getColor(this, R.color.key_text)
         for ((btn, on) in listOf(
-            ctrlButton to stickyCtrl, shiftButton to stickyShift, altButton to stickyAlt
+            ctrlButton to stickyCtrl, shiftButton to stickyShift,
+            altButton to stickyAlt, fnButton to stickyFn
         )) {
             btn.backgroundTintList = if (on) active else normal
             btn.setTextColor(if (on) white else keyText)
@@ -1581,6 +1739,11 @@ class TerminalActivity : AppCompatActivity(),
     override fun readFnKey(): Boolean = false
 
     override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession): Boolean {
+        // 桌面标签(noVNC):软键盘输入直接经 JS 注入远端(无终端会话可走)
+        if (currentTab?.desktop == true) {
+            sendDesktopChar(codePoint)
+            return true
+        }
         // 每个文本码点发送前都会经过这里；粘滞修饰键在下一个字符发出后自动取消。
         // SHIFT/ALT 对 IME 字符 Termux 不会自动处理（readShiftKey/readAltKey 只在硬件
         // 按键路径被查询），所以在发送前手工实现：
