@@ -506,9 +506,11 @@ class TerminalActivity : AppCompatActivity(),
         var wv = tab.webView
         if (wv == null) {
             wv = android.webkit.WebView(this).apply {
+                // 高度钉死为创建时容器高:键盘弹收时容器收缩也不改变 WebView 尺寸,
+                // 浏览器画面不缩放不位移(底部被键盘遮住),显示不全靠单指拖拽平移
                 layoutParams = android.widget.FrameLayout.LayoutParams(
                     android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                    container.height
                 )
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true // noVNC 用 localStorage 记 VNC 密码等设置
@@ -533,10 +535,30 @@ class TerminalActivity : AppCompatActivity(),
         wv.visibility = View.VISIBLE
     }
 
+    /** 各桌面标签的 CSS translate 平移量(切标签保留)。 */
+    private val desktopPanOffsets = HashMap<Int, Pair<Float, Float>>()
+
+    /** 单指拖拽平移:物理 px → CSS px(除以 WebView 当前缩放),累计后注入 transform。 */
+    private fun panDesktop(tab: Tab, dx: Float, dy: Float) {
+        val wv = tab.webView ?: return
+        val scale = if (wv.scale > 0f) wv.scale else 1f
+        val (ox, oy) = desktopPanOffsets[tab.id] ?: (0f to 0f)
+        val nx = ox + dx / scale
+        val ny = oy + dy / scale
+        desktopPanOffsets[tab.id] = nx to ny
+        wv.evaluateJavascript(
+            "(()=>{const el=document.getElementById('noVNC_container')||document.body;" +
+            "el.style.transform='translate(${nx}px,${ny}px)';return 0;})()", null
+        )
+    }
+
     /** 初始缩放百分比:让可视宽度约等于目标 CSS px——
-     *  桌面(6080)取 2560(双屏 5120 的半宽);浏览器(6081)画布 1080x1920,取 1080 正好铺满屏宽。 */
+     *  桌面(6080)取 1280(整桌面压缩的 2 倍,只显示约 1/4 区域);浏览器(6081)画布 1080x1920,取 540(约半宽放大)。 */
     private fun desktopInitialScalePct(tab: Tab): Int {
-        val targetCssWidth = if (tab.vncPort == 6081) 1080f else 2560f
+        // 默认只显示远程画面的约 1/4 区域(原来整桌面压缩显示,字太小没法用):
+        // 目标可视宽度 = 原来的一半。双指捏合缩放、单指拖拽平移在 PanInterceptLayout 配合
+        // WebView 内建缩放下工作。
+        val targetCssWidth = if (tab.vncPort == 6081) 540f else 1280f
         val dm = resources.displayMetrics
         // WebView 的 SCALE_NORMAL(100) 下 CSS px = 物理 px / density
         val cssWidth = dm.widthPixels / dm.density
@@ -579,12 +601,28 @@ class TerminalActivity : AppCompatActivity(),
         emptyHint.visibility = View.GONE
         // 桌面标签:显示自己的 WebView;TerminalView 用 alpha=0 隐藏但保持 VISIBLE
         // (INVISIBLE/GONE 会丢 IME 输入连接,桌面标签的"键盘"按钮就弹不出软键盘)
-        val container = findViewById<android.widget.FrameLayout>(R.id.terminal_container)
+        val container = findViewById<PanInterceptLayout>(R.id.terminal_container)
         if (tab.desktop) {
             terminalView.visibility = View.VISIBLE
             terminalView.alpha = 0f
             showDesktop(tab, container)
+            // 桌面手势:单指拖拽=平移(CSS translate 注入,noVNC 的 overflow:hidden 下
+            // WebView 原生滚动无效),双指捏合=缩放(WebView 内建),单击=noVNC 鼠标
+            container.panTarget = tab.webView
+            container.onPan = { dx, dy -> panDesktop(tab, dx, dy) }
+            // 桌面标签上单击(noVNC 点击照常放行)时弹本机键盘:
+            // 文本经 TerminalView 的 IME 输入连接 → onCodePoint → JS 注入 noVNC
+            container.onSingleTap = {
+                val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                terminalView.requestFocus()
+                imm.showSoftInput(terminalView, InputMethodManager.SHOW_IMPLICIT)
+            }
+            container.panEnabled = true
         } else {
+            container.panEnabled = false
+            container.panTarget = null
+            container.onPan = null
+            container.onSingleTap = null
             for (t in tabs) t.webView?.visibility = View.GONE
             terminalView.alpha = 1f
             terminalView.visibility = View.VISIBLE
@@ -1403,7 +1441,7 @@ class TerminalActivity : AppCompatActivity(),
      * 随容器同步变化，OnGlobalLayoutListener 触发时高度早已变完，"冻结"从未成立。
      */
     private fun setupImeResizeFreeze() {
-        val container = findViewById<android.widget.FrameLayout>(R.id.terminal_container)
+        val container = findViewById<PanInterceptLayout>(R.id.terminal_container)
         container.viewTreeObserver.addOnGlobalLayoutListener {
             val h = container.height
             if (h <= 0) return@addOnGlobalLayoutListener
@@ -1415,9 +1453,16 @@ class TerminalActivity : AppCompatActivity(),
                 terminalView.layoutParams = lp
             }
             if (h != lastContainerHeight) {
+                // CLI 闪烁根治:IME 候选栏(Gboard 建议条)随打字反复出现/消失,容器高度
+                // 小幅度抖动(~50px),每次抖动都触发 resize→本地重排+清屏重绘+alpha 遮蔽
+                // = 用户看到的"边打字边一闪一闪"。只对显著变化(键盘整体弹收,数百 px)
+                // 才结算;小于 64dp 的抖动直接忽略,终端尺寸原地不动。
+                val significant = lastContainerHeight < 0 || kotlin.math.abs(h - lastContainerHeight) >= dp(64)
                 lastContainerHeight = h
-                container.removeCallbacks(imeSettleRunnable)
-                container.postDelayed(imeSettleRunnable, 150)
+                if (significant) {
+                    container.removeCallbacks(imeSettleRunnable)
+                    container.postDelayed(imeSettleRunnable, 150)
+                }
             }
         }
     }
@@ -1765,7 +1810,14 @@ class TerminalActivity : AppCompatActivity(),
     }
 
     override fun onSingleTapUp(e: MotionEvent) {
-        if (currentTab?.desktop == true) return // 桌面标签:noVNC 的鼠标操作,不弹键盘
+        if (currentTab?.desktop == true) {
+            // 桌面/远程浏览器标签:点 noVNC 页面输入区(如浏览器地址栏)时弹本机键盘;
+            // 文本经 TerminalView 的 IME 输入连接 → onCodePoint → JS 注入 noVNC(见 sendDesktopChar)
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            terminalView.requestFocus()
+            imm.showSoftInput(terminalView, InputMethodManager.SHOW_IMPLICIT)
+            return
+        }
         terminalView.requestFocus()
         // 根因修复（滚屏跳动）之二：fling 动画还在跑的时候点按屏幕（用户意图是"停住滚动"），
         // GestureDetector 会把这次点按当成干净单击回调到这里；若照旧翻译方向键/弹键盘，

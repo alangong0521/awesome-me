@@ -116,8 +116,8 @@
         android:textColor="@color/status_text"
         android:textSize="12sp" />
 
-    <!-- 终端区:包一层 FrameLayout(空态提示 + IME 动画期间冻结 TerminalView 高度用) -->
-    <FrameLayout
+    <!-- 终端区:PanInterceptLayout(空态提示 + IME 冻结 TerminalView 高度 + 桌面标签手势分发) -->
+    <com.calla.remoteterminal.PanInterceptLayout
         android:id="@+id/terminal_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -146,7 +146,7 @@
             android:textColor="@color/key_text"
             android:textSize="14sp"
             android:visibility="gone" />
-    </FrameLayout>
+    </com.calla.remoteterminal.PanInterceptLayout>
 
     <!-- 特殊键栏(两行):第一行 ⏎ TAB ↑ ↓ ← →(均分铺满)+ 横竖屏 Fn;
          第二行 ESC ⌫ CTRL SHIFT ALT F1 F2 键盘(均分)。容器 id 供手势排除区用 -->
