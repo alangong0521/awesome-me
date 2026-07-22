@@ -11,15 +11,15 @@ android {
         applicationId 'com.calla.remoteterminal'
         minSdk 24
         targetSdk 34
-        versionCode 20
-        versionName '1.4.6'
+        versionCode 21
+        versionName '1.4.7'
     }
 
-    // APK 产物直接带版本号命名(awesome-me-<versionName>.apk),不靠手工改名,
+    // APK 产物直接带版本号命名(awesome_me_<versionName>.apk),不靠手工改名,
     // 从文件名即可判断版本
     applicationVariants.all { variant ->
         variant.outputs.all {
-            outputFileName = "awesome-me-${variant.versionName}.apk"
+            outputFileName = "awesome_me_${variant.versionName}.apk"
         }
     }
 

@@ -2,6 +2,7 @@ package com.calla.remoteterminal
 
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.Context
 import android.os.Bundle
 import android.view.View
 import android.widget.AdapterView
@@ -21,6 +22,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -114,8 +116,128 @@ class SetupActivity : AppCompatActivity() {
         testButton.setOnClickListener { testConnection() }
         connectButton.setOnClickListener { saveAndConnect() }
         findViewById<Button>(R.id.btn_battery).setOnClickListener { requestIgnoreBatteryOptimizations() }
+        findViewById<Button>(R.id.btn_update).setOnClickListener { checkUpdate(manual = true) }
 
         showSplash()
+        checkUpdate(manual = false) // 启动时静默自检,有新版本在按钮上亮红点
+    }
+
+    // ---------- 自更新(GitHub Releases latest) ----------
+
+    private var latestTag: String? = null
+    private var latestApkUrl: String? = null
+    private val updateBadge by lazy { findViewById<android.widget.TextView>(R.id.update_badge) }
+
+    /** 语义化版本比较:a>b 返回正数(段按数值比,缺段补 0)。 */
+    private fun versionCompare(a: String, b: String): Int {
+        val pa = a.trimStart('v').split('.').map { it.toIntOrNull() ?: 0 }
+        val pb = b.trimStart('v').split('.').map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(pa.size, pb.size)) {
+            val d = (pa.getOrElse(i) { 0 }) - (pb.getOrElse(i) { 0 })
+            if (d != 0) return d
+        }
+        return 0
+    }
+
+    /** GET GitHub latest release;有新版本 → latestApkUrl + 红点。 */
+    private fun checkUpdate(manual: Boolean) {
+        if (manual) toast(getString(R.string.update_checking))
+        val url = "https://api.github.com/repos/alangong0521/awesome-me/releases/latest"
+        httpClient.newCall(Request.Builder().url(url).header("Accept", "application/vnd.github+json").build())
+            .enqueue(object : Callback {
+                override fun onResponse(call: Call, response: Response) {
+                    val body = response.body?.string().orEmpty()
+                    response.close()
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        try {
+                            val json = JSONObject(body)
+                            val tag = json.optString("tag_name")
+                            val assets = json.optJSONArray("assets")
+                            var apk: String? = null
+                            if (assets != null) {
+                                for (i in 0 until assets.length()) {
+                                    val a = assets.getJSONObject(i)
+                                    if (a.optString("name").endsWith(".apk")) {
+                                        apk = a.optString("browser_download_url"); break
+                                    }
+                                }
+                            }
+                            if (tag.isNotEmpty() && versionCompare(tag, BuildConfig.VERSION_NAME) > 0) {
+                                latestTag = tag
+                                latestApkUrl = apk
+                                updateBadge.visibility = android.view.View.VISIBLE
+                                if (manual) showUpdateDialog()
+                            } else if (manual) {
+                                toast(getString(R.string.update_latest))
+                            }
+                        } catch (t: Throwable) {
+                            if (manual) toast(getString(R.string.update_check_failed, t.message ?: "parse"))
+                        }
+                    }
+                }
+
+                override fun onFailure(call: Call, e: IOException) {
+                    runOnUiThread {
+                        if (manual && !isFinishing && !isDestroyed) {
+                            toast(getString(R.string.update_check_failed, e.message ?: e.javaClass.simpleName))
+                        }
+                    }
+                }
+            })
+    }
+
+    /** 有新版本:弹窗 → 确认后 DownloadManager 下载 → 完成后 FileProvider 触发安装。 */
+    private fun showUpdateDialog() {
+        val tag = latestTag ?: return
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.action_check_update)
+            .setMessage(getString(R.string.update_found, tag.trimStart('v'), BuildConfig.VERSION_NAME))
+            .setPositiveButton(R.string.update_download_install) { _, _ ->
+                latestApkUrl?.let { downloadAndInstall(tag, it) }
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
+    private fun downloadAndInstall(tag: String, url: String) {
+        val dir = java.io.File(getExternalFilesDir(null), "updates").apply { mkdirs() }
+        val apk = java.io.File(dir, "awesome_me_$tag.apk")
+        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+        val id = dm.enqueue(
+            android.app.DownloadManager.Request(android.net.Uri.parse(url))
+                .setTitle("AwesomeMe $tag")
+                .setDestinationUri(android.net.Uri.fromFile(apk))
+                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        )
+        toast(getString(R.string.download_started, apk.path))
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        fun poll() {
+            val c = dm.query(android.app.DownloadManager.Query().setFilterById(id))
+            val status = if (c != null && c.moveToFirst()) {
+                c.getInt(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_STATUS)).also { c.close() }
+            } else -1
+            when (status) {
+                android.app.DownloadManager.STATUS_SUCCESSFUL -> installApk(apk)
+                android.app.DownloadManager.STATUS_FAILED ->
+                    toast(getString(R.string.download_failed, "status=$status"))
+                else -> handler.postDelayed({ poll() }, 800)
+            }
+        }
+        poll()
+    }
+
+    /** FileProvider 触发系统安装(Android 8+ 会引导用户授权一次"安装未知应用")。 */
+    private fun installApk(apk: java.io.File) {
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            this, "$packageName.fileprovider", apk
+        )
+        startActivity(
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        )
     }
 
     /**
@@ -161,6 +283,11 @@ class SetupActivity : AppCompatActivity() {
                 android.view.Gravity.CENTER
             ).apply { topMargin = dp(96) }
         }
+        // App 图标"小脑袋":从屏幕左边旋转着滚进来,到中间偏右停住后眨个眼
+        val icon = android.widget.ImageView(this).apply {
+            setImageResource(R.mipmap.ic_launcher)
+            layoutParams = android.widget.FrameLayout.LayoutParams(dp(84), dp(84), android.view.Gravity.CENTER)
+        }
         // 内部使用声明(低调小字)
         val tagline = TextView(this).apply {
             text = "nio-cva团队开发，仅供cva团队内部使用"
@@ -176,7 +303,33 @@ class SetupActivity : AppCompatActivity() {
         overlay.addView(title)
         overlay.addView(subtitle)
         overlay.addView(tagline)
+        overlay.addView(icon)
         root.addView(overlay)
+        // 图标滚入:左屏外 → 中间偏右,同时转两圈;停住后眨个眼(Y 压缩两下)
+        val stopX = dp(56).toFloat()
+        val startX = -(resources.displayMetrics.widthPixels / 2f + dp(84))
+        icon.translationX = startX
+        icon.post {
+            icon.animate()
+                .translationX(stopX)
+                .rotation(720f)
+                .setDuration(1300)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.4f))
+                .withEndAction {
+                    icon.postDelayed({
+                        icon.animate().scaleY(0.12f).setDuration(90).withEndAction {
+                            icon.animate().scaleY(1f).setDuration(120).withEndAction {
+                                icon.postDelayed({
+                                    icon.animate().scaleY(0.12f).setDuration(90).withEndAction {
+                                        icon.animate().scaleY(1f).setDuration(120).start()
+                                    }.start()
+                                }, 160)
+                            }.start()
+                        }.start()
+                    }, 350)
+                }
+                .start()
+        }
         // 等文字量出宽度后挂蓝紫渐变(此时 width 才非 0)
         title.viewTreeObserver.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
             override fun onGlobalLayout() {
@@ -191,6 +344,7 @@ class SetupActivity : AppCompatActivity() {
         })
         // 入场:淡入 + 缩放上浮
         title.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(700)
+            .setStartDelay(1700) // 图标滚入停稳后标题再入场
             .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
         // 泛光呼吸:半径 16↔40,两轮
         val glow = android.animation.ValueAnimator.ofFloat(16f, 40f).apply {
@@ -201,17 +355,17 @@ class SetupActivity : AppCompatActivity() {
                 title.setShadowLayer(a.animatedValue as Float, 0f, 0f, 0x804F8CFF.toInt())
             }
         }
-        title.postDelayed({ glow.start() }, 400)
+        title.postDelayed({ glow.start() }, 2000)
         // 副标与小字延迟淡入
-        subtitle.animate().alpha(1f).setStartDelay(600).setDuration(500).start()
-        tagline.animate().alpha(1f).setStartDelay(1100).setDuration(600).start()
-        // 3.6s 后整体淡出(glow 动画同时停)
+        subtitle.animate().alpha(1f).setStartDelay(2200).setDuration(500).start()
+        tagline.animate().alpha(1f).setStartDelay(2700).setDuration(600).start()
+        // 4.8s 后整体淡出(glow 动画同时停),含淡出总时长 > 5s
         overlay.postDelayed({
             glow.cancel()
             overlay.animate().alpha(0f).setDuration(400).withEndAction {
                 root.removeView(overlay)
             }.start()
-        }, 3600)
+        }, 4800)
     }
 
     private fun dp(value: Int): Int =

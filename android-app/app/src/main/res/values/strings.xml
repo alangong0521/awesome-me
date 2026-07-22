@@ -27,6 +27,12 @@
     <string name="action_connect">连接</string>
     <string name="action_save_machine">存为机器</string>
     <string name="action_ignore_battery">后台保活：忽略电池优化</string>
+    <string name="action_check_update">检查更新</string>
+    <string name="update_latest">已是最新版本</string>
+    <string name="update_found">发现新版本 v%1$s（当前 v%2$s）</string>
+    <string name="update_download_install">下载并安装</string>
+    <string name="update_checking">正在检查更新…</string>
+    <string name="update_check_failed">检查更新失败：%1$s</string>
     <string name="battery_already_ignored">已在电池优化白名单中</string>
     <string name="battery_request_failed">无法打开系统电池优化设置</string>
     <string name="machine_manual">(手动输入)</string>
@@ -95,12 +101,18 @@
     <string name="dialog_file_pushed_message">%1$s（%2$s）</string>
     <string name="action_download">下载</string>
     <string name="download_failed">下载启动失败：%1$s</string>
+    <string name="upload_failed">上传 %1$s 失败：%2$s</string>
     <string name="download_started">下载中，保存到：%1$s</string>
     <string name="file_pushed_toast">收到文件：%1$s</string>
     <string name="inbox_title">推送收件箱</string>
     <string name="inbox_empty">暂无推送记录</string>
     <string name="inbox_clear">清空</string>
     <string name="inbox_downloaded">已下载</string>
+    <string name="tab_menu_rename">重命名页签</string>
+    <string name="tab_menu_close">关闭页签</string>
+    <string name="hint_tab_name">页签显示名</string>
+    <string name="action_ok">确定</string>
+    <string name="error_tab_name_required">显示名不能为空</string>
 
     <!-- 新建 shell 选择 -->
     <string name="shell_new_title">新建 shell</string>

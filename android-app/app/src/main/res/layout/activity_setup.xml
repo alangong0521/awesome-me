@@ -171,6 +171,29 @@
             android:layout_marginTop="8dp"
             android:text="@string/action_ignore_battery" />
 
+        <!-- 检查更新:启动时自动查 GitHub latest release,有新版本时按钮旁出红点 -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <Button
+                android:id="@+id/btn_update"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/action_check_update" />
+
+            <TextView
+                android:id="@+id/update_badge"
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:layout_gravity="top|end"
+                android:layout_marginTop="12dp"
+                android:layout_marginEnd="12dp"
+                android:background="@drawable/inbox_badge_bg"
+                android:visibility="gone" />
+        </FrameLayout>
+
     </LinearLayout>
     </ScrollView>
 

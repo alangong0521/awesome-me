@@ -42,6 +42,18 @@
             android:textColor="@color/key_text"
             android:textSize="14sp" />
 
+        <!-- 上传:系统文件选择器(可多选)→ POST 到服务端 ~/phone-uploads/ -->
+        <Button
+            android:id="@+id/btn_upload"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginRight="4dp"
+            android:backgroundTint="@color/key_background"
+            android:minWidth="48dp"
+            android:text="⬆"
+            android:textColor="@color/key_text"
+            android:textSize="14sp" />
+
         <!-- 推送收件箱:文件推送记录(未读角标);点开看列表/下载 -->
         <FrameLayout
             android:layout_width="wrap_content"

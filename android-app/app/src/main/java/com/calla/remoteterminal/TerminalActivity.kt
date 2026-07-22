@@ -129,7 +129,8 @@ class TerminalActivity : AppCompatActivity(),
      *  desktop=true 时是 noVNC 桌面标签:无终端会话,内容是自己的 WebView。 */
     private class Tab(
         val id: Int,
-        val label: String,
+        /** 显示名(可变:支持"重命名页签",只改 App 侧显示,不动 tmux 会话名)。 */
+        var label: String,
         val app: String,
         val tmuxSession: String?,
         var session: RemoteTerminalSession?,
@@ -208,6 +209,9 @@ class TerminalActivity : AppCompatActivity(),
     /** 文件推送去重：key=name|size，value=上次提示时间戳；只挡窗口期内的重复广播。 */
     private val pushedFileKeys = LinkedHashMap<String, Long>()
 
+    /** 最近一次 /sessions 拉到的服务端 tmux 会话名集合(autoSessionName 避让撞名用)。 */
+    private val lastKnownTmuxSessions = HashSet<String>()
+
     /** 前台弹对话框、后台发系统通知（onResume/onPause 维护）。 */
     private var inForeground = false
 
@@ -235,6 +239,9 @@ class TerminalActivity : AppCompatActivity(),
         ctrlButton = findViewById(R.id.key_ctrl)
         inboxBadge = findViewById(R.id.inbox_badge)
         findViewById<Button>(R.id.btn_inbox).setOnClickListener { showInboxDialog() }
+        findViewById<Button>(R.id.btn_upload).setOnClickListener {
+            uploadPicker.launch(arrayOf("*/*"))
+        }
 
         baseFontPx = TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_SP, BASE_FONT_SP, resources.displayMetrics
@@ -257,7 +264,13 @@ class TerminalActivity : AppCompatActivity(),
             return
         }
 
-        openTab(initialApp, initialSession)
+        // 初始标签若没给会话名,先拉一次 /sessions 再开——否则自动生成名可能撞上服务端
+        // 已有会话(tmux -A 存在即接入,"全新 shell"变接入历史会话)。拉不到也照开(退让)。
+        if (initialSession == null) {
+            prefetchSessionsThenOpen(initialApp)
+        } else {
+            openTab(initialApp, initialSession)
+        }
         refreshInboxBadge()
 
         // Android 13+ 发系统通知需要运行时权限（后台收到文件推送时用），只请求一次
@@ -339,6 +352,36 @@ class TerminalActivity : AppCompatActivity(),
 
     // ---------- 标签管理 ----------
 
+    /** 启动预拉 /sessions 填 lastKnownTmuxSessions 后再开初始标签(防初始标签撞名误接旧会话)。 */
+    private fun prefetchSessionsThenOpen(initialApp: String) {
+        val url = "http://$host:$port/sessions?token=${URLEncoder.encode(token, Charsets.UTF_8.name())}"
+        httpClient.newCall(Request.Builder().url(url).build()).enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) {
+                val body = response.body?.string().orEmpty()
+                response.close()
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        runCatching {
+                            val arr = JSONObject(body).getJSONArray("sessions")
+                            lastKnownTmuxSessions.clear()
+                            for (i in 0 until arr.length()) {
+                                arr.getJSONObject(i).optString("name").trim()
+                                    .takeIf { it.isNotEmpty() }?.let { lastKnownTmuxSessions.add(it) }
+                            }
+                        }
+                        openTab(initialApp, null)
+                    }
+                }
+            }
+
+            override fun onFailure(call: Call, e: IOException) {
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) openTab(initialApp, null) // 拉不到也照开(退让)
+                }
+            }
+        })
+    }
+
     /**
      * 新建标签（创建会话对象）并立即切换过去；连接在 onEmulatorSet 里发起。
      * 任何 app 都落进 tmux 命名会话（服务端对所有 app 的 session 参数都包 tmux）：
@@ -360,8 +403,10 @@ class TerminalActivity : AppCompatActivity(),
             mToken = machine.token
             mName = machine.name
         }
-        // 标签标题只用会话名(机器归属由机器栏表达,不再带 "机器名/" 前缀)
-        val tab = Tab(nextTabId++, sessionName, app, sessionName, null, mHost, mPort, mToken, mName)
+        // 标签标题只用会话名(机器归属由机器栏表达,不再带 "机器名/" 前缀);
+        // 若用户曾"重命名页签",用自定义名(prefs 按 机器/会话名 持久化)
+        val label = customTabLabel(mName, sessionName) ?: sessionName
+        val tab = Tab(nextTabId++, label, app, sessionName, null, mHost, mPort, mToken, mName)
         tab.session = createSession(tab)
         tabs.add(tab)
         // 新建的标签归属即用户当前想看的:机器栏选中跟随到该机(空态随之解除)
@@ -501,7 +546,7 @@ class TerminalActivity : AppCompatActivity(),
     }
 
     /** 桌面标签的 WebView:懒创建一次后只 show/hide(切后台/切标签不重载页面)。 */
-    private fun showDesktop(tab: Tab, container: android.widget.FrameLayout) {
+    private fun showDesktop(tab: Tab, container: PanInterceptLayout) {
         for (t in tabs) t.webView?.visibility = View.GONE
         var wv = tab.webView
         if (wv == null) {
@@ -523,7 +568,7 @@ class TerminalActivity : AppCompatActivity(),
                 // 初始缩放让可视宽度约 2560 CSS px(半宽),横纵滚动定位;
                 // 滚动条常驻,方便用户知道当前位置
                 settings.useWideViewPort = false
-                setInitialScale(desktopInitialScalePct(tab))
+                setInitialScale(desktopInitialScalePct(tab, container))
                 setScrollbarFadingEnabled(false)
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
                 webViewClient = android.webkit.WebViewClient() // 链接都在本 WebView 内打开
@@ -533,6 +578,7 @@ class TerminalActivity : AppCompatActivity(),
             tab.webView = wv
         }
         wv.visibility = View.VISIBLE
+        addDesktopSliders(container, tab) // 底部水平 + 右侧垂直视野滑块
     }
 
     /** 各桌面标签的 CSS translate 平移量(切标签保留)。 */
@@ -543,8 +589,12 @@ class TerminalActivity : AppCompatActivity(),
         val wv = tab.webView ?: return
         val scale = if (wv.scale > 0f) wv.scale else 1f
         val (ox, oy) = desktopPanOffsets[tab.id] ?: (0f to 0f)
-        val nx = ox + dx / scale
-        val ny = oy + dy / scale
+        applyDesktopTransform(tab, ox + dx / scale, oy + dy / scale)
+    }
+
+    /** 统一写平移量并注入 CSS transform(拖拽和滑块共用)。 */
+    private fun applyDesktopTransform(tab: Tab, nx: Float, ny: Float) {
+        val wv = tab.webView ?: return
         desktopPanOffsets[tab.id] = nx to ny
         wv.evaluateJavascript(
             "(()=>{const el=document.getElementById('noVNC_container')||document.body;" +
@@ -552,17 +602,149 @@ class TerminalActivity : AppCompatActivity(),
         )
     }
 
-    /** 初始缩放百分比:让可视宽度约等于目标 CSS px——
-     *  桌面(6080)取 1280(整桌面压缩的 2 倍,只显示约 1/4 区域);浏览器(6081)画布 1080x1920,取 540(约半宽放大)。 */
-    private fun desktopInitialScalePct(tab: Tab): Int {
-        // 默认只显示远程画面的约 1/4 区域(原来整桌面压缩显示,字太小没法用):
-        // 目标可视宽度 = 原来的一半。双指捏合缩放、单指拖拽平移在 PanInterceptLayout 配合
-        // WebView 内建缩放下工作。
-        val targetCssWidth = if (tab.vncPort == 6081) 540f else 1280f
+    // ---------- 桌面视野滑块(底部水平 + 右侧垂直,半透明,随缩放联动) ----------
+
+    private var sliderSyncToken = 0
+
+    /** 为桌面标签在容器上加两条视野滑块;重复调用先清掉旧的。 */
+    private fun addDesktopSliders(container: PanInterceptLayout, tab: Tab) {
+        val old = (0 until container.childCount).mapNotNull { i ->
+            container.getChildAt(i).takeIf { it.tag == "desktop_slider" }
+        }
+        old.forEach { container.removeView(it) }
+
+        val hSeek = android.widget.SeekBar(this).apply {
+            tag = "desktop_slider"
+            alpha = 0.3f
+            max = 1
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT, dp(18),
+                android.view.Gravity.BOTTOM
+            )
+        }
+        val vSeek = android.widget.SeekBar(this).apply {
+            tag = "desktop_slider"
+            alpha = 0.3f
+            max = 1
+            rotation = 270f // 竖向滑块
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                dp(220), dp(18),
+                android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+            )
+        }
+        val listener = object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: android.widget.SeekBar, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                val (ox, oy) = desktopPanOffsets[tab.id] ?: (0f to 0f)
+                if (sb === hSeek) applyDesktopTransform(tab, -progress.toFloat(), oy)
+                else applyDesktopTransform(tab, ox, -progress.toFloat())
+            }
+            override fun onStartTrackingTouch(sb: android.widget.SeekBar) {}
+            override fun onStopTrackingTouch(sb: android.widget.SeekBar) {}
+        }
+        hSeek.setOnSeekBarChangeListener(listener)
+        vSeek.setOnSeekBarChangeListener(listener)
+        container.addView(hSeek)
+        container.addView(vSeek)
+
+        // 周期性把"当前缩放下的可视溢出"映射到滑块行程,并同步滑块位置
+        val token = ++sliderSyncToken
+        val sync = object : Runnable {
+            override fun run() {
+                if (token != sliderSyncToken || currentTab !== tab) return
+                val wv = tab.webView ?: return
+                val scale = if (wv.scale > 0f) wv.scale else 1f
+                val dm = resources.displayMetrics
+                val remoteW = if (tab.vncPort == 6081) 1080f else 5120f
+                val remoteH = if (tab.vncPort == 6081) 1920f else 1440f
+                // 可视 CSS 尺寸 = 物理 px / (scale × density)
+                val visW = wv.width / (scale * dm.density)
+                val visH = wv.height / (scale * dm.density)
+                val overX = (remoteW - visW).coerceAtLeast(0f)
+                val overY = (remoteH - visH).coerceAtLeast(0f)
+                hSeek.max = overX.toInt().coerceAtLeast(1)
+                vSeek.max = overY.toInt().coerceAtLeast(1)
+                val (ox, oy) = desktopPanOffsets[tab.id] ?: (0f to 0f)
+                val cx = ox.coerceIn(-overX, 0f)
+                val cy = oy.coerceIn(-overY, 0f)
+                if (cx != ox || cy != oy) applyDesktopTransform(tab, cx, cy)
+                hSeek.progress = (-cx).toInt().coerceIn(0, hSeek.max)
+                vSeek.progress = (-cy).toInt().coerceIn(0, vSeek.max)
+                container.postDelayed(this, 500)
+            }
+        }
+        container.post(sync)
+    }
+    /** 初始缩放百分比:center-crop——宽/高两向各算缩放比取较大者,短边贴满,
+     *  长边超出部分靠滑块/拖拽看(不再 center-inside 留粗黑边)。 */
+    private fun desktopInitialScalePct(tab: Tab, container: android.view.View): Int {
+        val remoteW = if (tab.vncPort == 6081) 1080f else 5120f
+        val remoteH = if (tab.vncPort == 6081) 1920f else 1440f
         val dm = resources.displayMetrics
         // WebView 的 SCALE_NORMAL(100) 下 CSS px = 物理 px / density
-        val cssWidth = dm.widthPixels / dm.density
-        return (cssWidth / targetCssWidth * 100).toInt().coerceIn(15, 100)
+        val cssW = container.width / dm.density
+        val cssH = container.height / dm.density
+        return (maxOf(cssW / remoteW, cssH / remoteH) * 100).toInt().coerceIn(10, 150)
+    }
+
+    // ---------- 标签长按菜单(重命名页签/关闭页签/取消) ----------
+
+    /** 自定义标签名持久化(prefs JSON: "机器名/会话名" → 自定义显示名)。 */
+    private fun customTabLabel(machine: String, session: String): String? {
+        val raw = getSharedPreferences(MachineStore.PREFS_NAME, MODE_PRIVATE)
+            .getString("tab_custom_labels", null) ?: return null
+        return runCatching { JSONObject(raw).optString("$machine/$session").ifEmpty { null } }.getOrNull()
+    }
+
+    private fun saveCustomTabLabel(machine: String, session: String, label: String) {
+        val prefs = getSharedPreferences(MachineStore.PREFS_NAME, MODE_PRIVATE)
+        val raw = prefs.getString("tab_custom_labels", null)
+        val obj = runCatching { JSONObject(raw ?: "{}") }.getOrElse { JSONObject() }
+        obj.put("$machine/$session", label)
+        prefs.edit().putString("tab_custom_labels", obj.toString()).apply()
+    }
+
+    /** 长按标签:重命名页签 / 关闭页签 / 取消。 */
+    private fun showTabMenu(tab: Tab) {
+        val items = arrayOf(getString(R.string.tab_menu_rename), getString(R.string.tab_menu_close), getString(R.string.action_cancel))
+        MaterialAlertDialogBuilder(this)
+            .setTitle(tab.label)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showRenameTabDialog(tab)
+                    1 -> confirmCloseTab(tab)
+                    else -> Unit // 取消
+                }
+            }
+            .show()
+    }
+
+    /** 重命名页签:只改 App 侧显示名(不动服务端 tmux 会话名),按 机器/会话名 持久化。 */
+    private fun showRenameTabDialog(tab: Tab) {
+        val edit = android.widget.EditText(this).apply {
+            setText(tab.label)
+            setSelection(tab.label.length)
+            hint = getString(R.string.hint_tab_name)
+        }
+        val pad = dp(20)
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.tab_menu_rename)
+            .setView(edit, pad, pad / 2, pad, 0)
+            .setPositiveButton(R.string.action_ok, null)
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val name = edit.text.toString().trim()
+            if (name.isEmpty()) {
+                edit.error = getString(R.string.error_tab_name_required)
+                return@setOnClickListener
+            }
+            tab.label = name
+            tab.tmuxSession?.let { saveCustomTabLabel(tab.machineName, it, name) }
+            refreshTabBar()
+            refreshStatus()
+            dialog.dismiss()
+        }
     }
 
     /** 当前选中机器可见的标签(标签栏只画这些)。 */
@@ -579,7 +761,11 @@ class TerminalActivity : AppCompatActivity(),
     }
 
     private fun autoSessionName(app: String): String {
+        // 避让三类已占用名:本地标签、服务端 tmux 现有会话(/sessions 刚拉到的)。
+        // 必须避让服务端已有名:tmux new-session -A -s <名> 是"存在即接入",
+        // 撞名会把"全新 shell"变成接入某个历史会话(用户的 codebuddy 旧会话就是这么被误接的)。
         val used = tabs.mapNotNull { it.tmuxSession }.toHashSet()
+        used += lastKnownTmuxSessions
         var n = tabs.count { it.app == app } + 1
         var name = "$app-$n"
         while (name in used) {
@@ -759,8 +945,13 @@ class TerminalActivity : AppCompatActivity(),
             val h = m?.host ?: host
             val p = m?.port?.toIntOrNull() ?: port
             val t = m?.token ?: token
-            fetchTmuxSessions(h, p, t, sessionsStatus, sessionsContainer,
-                onListParsed = { lastSessions = it }) { name ->
+            // 更新 refetchSessions 回调处,同步维护"服务端现有会话名"集合(供 autoSessionName 避让)
+        fetchTmuxSessions(h, p, t, sessionsStatus, sessionsContainer,
+            onListParsed = {
+                lastSessions = it
+                lastKnownTmuxSessions.clear()
+                lastKnownTmuxSessions.addAll(it.map { s -> s.first })
+            }) { name ->
                 openTab("tmux", name, m)
                 dialog.dismiss()
             }
@@ -770,7 +961,8 @@ class TerminalActivity : AppCompatActivity(),
                 refetchSessions()
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
-        refetchSessions()
+        // 注意:不再手动 refetchSessions()——给 Spinner 赋 listener 会立即以当前选中项回调一次
+        // (v1.4.6 及之前手动调一次 + 回调一次 = 并发两趟拉取,清空后各追加一遍 = 列表重复两遍)
 
         // 手动处理确定按钮，校验失败时不关闭对话框
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -843,22 +1035,19 @@ class TerminalActivity : AppCompatActivity(),
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     var added = 0
-                    val parsed = ArrayList<Pair<String, Boolean>>()
+                    val parsed = ArrayList<Triple<String, Boolean, Long>>()
                     try {
                         val arr = JSONObject(body).getJSONArray("sessions")
+                        // 按名去重(服务端/并发拉取都可能给重复项),服务端已按 activity 倒序,取前 6 个
+                        val seen = LinkedHashSet<String>()
                         for (i in 0 until arr.length()) {
                             val o = arr.getJSONObject(i)
                             val name = o.optString("name").trim()
-                            if (name.isNotEmpty()) parsed += name to o.optBoolean("attached", false)
+                            if (name.isNotEmpty() && seen.add(name)) {
+                                parsed += Triple(name, o.optBoolean("attached", false), o.optLong("activity", 0L))
+                            }
                         }
-                        // 服务端已按 activity 倒序,只取最近活跃的 5 个
-                        val n = minOf(arr.length(), 5)
-                        for (i in 0 until n) {
-                            val o = arr.getJSONObject(i)
-                            val name = o.optString("name").trim()
-                            if (name.isEmpty()) continue
-                            val attached = o.optBoolean("attached", false)
-                            val activity = o.optLong("activity", 0L)
+                        for ((name, attached, activity) in parsed.take(6)) {
                             container.addView(Button(this@TerminalActivity).apply {
                                 text = buildString {
                                     append(name)
@@ -873,7 +1062,7 @@ class TerminalActivity : AppCompatActivity(),
                     } catch (t: Throwable) {
                         // 响应异常视同无会话，下面统一显示提示
                     }
-                    onListParsed?.invoke(parsed)
+                    onListParsed?.invoke(parsed.map { it.first to it.second })
                     if (added == 0) {
                         status.setText(R.string.sessions_none)
                     } else {
@@ -939,7 +1128,7 @@ class TerminalActivity : AppCompatActivity(),
                 ).apply { marginEnd = dp(4) }
                 setOnClickListener { switchToTab(tab) }
                 setOnLongClickListener {
-                    confirmCloseTab(tab)
+                    showTabMenu(tab)
                     true
                 }
             }
@@ -1015,6 +1204,60 @@ class TerminalActivity : AppCompatActivity(),
         refreshTabBar()
         if (tab === currentTab) refreshStatus()
     }
+
+    // ---------- 文件上传(⬆:系统文件选择器 → POST /upload → ~/phone-uploads/) ----------
+
+    /** 系统文件选择器(单选,选中即传;多个文件可重复点 ⬆)。 */
+    private val uploadPicker = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { uploadFiles(listOf(it)) }
+    }
+
+    /** 逐个上传:读内容 → raw body POST,文件名走 X-Filename。 */
+    private fun uploadFiles(uris: List<android.net.Uri>) {
+        // 用当前标签的机器(没有则默认机)
+        val tab = currentTab
+        val h = tab?.host ?: host
+        val p = tab?.port ?: port
+        val t = tab?.token ?: token
+        for (uri in uris) {
+            Thread {
+                try {
+                    val name = queryDisplayName(uri) ?: "upload-${System.currentTimeMillis()}"
+                    val bytes = contentResolver.openInputStream(uri)!!.readBytes()
+                    val url = "http://$h:$p/upload?token=${URLEncoder.encode(t, Charsets.UTF_8.name())}"
+                    val body = okhttp3.RequestBody.create(null, bytes)
+                    val req = Request.Builder().url(url).post(body)
+                        .header("X-Filename", URLEncoder.encode(name, Charsets.UTF_8.name()))
+                        .header("Content-Type", "application/octet-stream")
+                        .build()
+                    httpClient.newCall(req).execute().use { resp ->
+                        val respBody = resp.body?.string().orEmpty()
+                        runOnUiThread {
+                            if (resp.isSuccessful) {
+                                Toast.makeText(this, "已上传到远端 ~/phone-uploads/$name", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(this, getString(R.string.upload_failed, name, "HTTP ${resp.code}: $respBody"), Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        Toast.makeText(this, getString(R.string.upload_failed, uri.lastPathSegment ?: "?", e.message ?: ""), Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.start()
+        }
+    }
+
+    /** 从 content:// URI 查显示名(查不到返回 null)。 */
+    private fun queryDisplayName(uri: android.net.Uri): String? = runCatching {
+        contentResolver.query(uri, null, null, null, null)?.use { c ->
+            val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+        }
+    }.getOrNull()
 
     // ---------- 文件推送（服务端 watch ~/phone-push/ 的广播） ----------
 
@@ -1418,18 +1661,20 @@ class TerminalActivity : AppCompatActivity(),
     private var lastContainerHeight = -1
 
     /** 容器高度稳定 250ms 后的一次性对齐（每次弹/收只触发一次 resize）。 */
+    private var imeHideTime = 0L
     private val imeSettleRunnable = Runnable {
         val lp = terminalView.layoutParams
         lp.height = findViewById<android.widget.FrameLayout>(R.id.terminal_container).height
         terminalView.layoutParams = lp
         // 瞬时切换、不露滚动过程:resize 之后本地 emulator 立即重排(逐行位移 = 用户看到
         // 的"滚动很多行"),随后 200ms 去抖清屏 + 服务端全量重绘(~400ms)。把这段窗口
-        // 用 alpha=0 盖住,新内容到达(onTextChanged)或兜底 800ms 后瞬间恢复——用户
-        // 看到的是"键盘到位 → 短暂遮罩 → 稳定画面",没有滚动过程。
+        // 用 alpha=0 盖住;新内容到达(onTextChanged)且距遮蔽满 400ms 后才恢复——
+        // 防 tmux 的部分重绘(状态栏时钟/spinner)提前揭开露出半成品画面。
+        imeHideTime = System.currentTimeMillis()
         terminalView.alpha = 0f
         terminalView.postDelayed({
             if (terminalView.alpha == 0f) terminalView.alpha = 1f
-        }, 800)
+        }, 900)
     }
 
     /**
@@ -1929,8 +2174,10 @@ class TerminalActivity : AppCompatActivity(),
 
     override fun onTextChanged(changedSession: TerminalSession) {
         if (changedSession !== currentTab?.session?.session) return
-        // IME 弹/收 resize 后新内容到达 = 画面已重绘稳定,瞬间恢复可见(见 imeSettleRunnable)
-        if (terminalView.alpha == 0f) terminalView.alpha = 1f
+        // IME 弹/收 resize 后新内容到达且已过遮蔽期 = 画面已重绘稳定,瞬间恢复可见(见 imeSettleRunnable)
+        if (terminalView.alpha == 0f && System.currentTimeMillis() - imeHideTime > 400) {
+            terminalView.alpha = 1f
+        }
         // 根因修复（滚屏跳动）之一：Termux 的 TerminalView.onScreenUpdated() 在任何新输出
         // 到达时都会把 mTopRow 强制归零（拽回底部，只有文本选择时豁免）。本地 Termux 里
         // shell 只在用户敲命令时输出，无所谓；但这里远端输出持续到达（tmux 状态栏时钟、

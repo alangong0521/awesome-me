@@ -89,6 +89,26 @@ const server = http.createServer((req, res) => {
       });
     return;
   }
+  // 手机上传文件:POST /upload?token=..,raw body + X-Filename header,存 ~/phone-uploads/
+  // (手机拍照/选文件 → 这里落盘 → 用户让 CLI 里的 AI 直接读这个路径)
+  if (url.pathname === '/upload' && req.method === 'POST') {
+    const rawName = req.headers['x-filename'];
+    const name = path.basename(decodeURIComponent(Array.isArray(rawName) ? rawName[0] : (rawName || 'upload.bin')));
+    const dir = path.join(os.homedir(), 'phone-uploads');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, name);
+    let size = 0;
+    req.on('data', (c) => { size += c.length; });
+    const out = fs.createWriteStream(file);
+    req.pipe(out);
+    out.on('finish', () => {
+      console.log(`[${new Date().toISOString()}] upload: ${name} (${size}B) -> ${file}`);
+      res.writeHead(200, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ ok: true, path: file, name, size }));
+    });
+    out.on('error', (e) => res.writeHead(500).end(String(e)));
+    return;
+  }
   // 推送文件下载(phone-push 目录里的文件)
   if (url.pathname.startsWith('/files/')) {
     const name = path.basename(decodeURIComponent(url.pathname.slice('/files/'.length)));

@@ -39,11 +39,27 @@ class PanInterceptLayout @JvmOverloads constructor(
     private var lastY = 0f
     private var downTime = 0L
     private var panning = false
+    /** 本次手势落在视野滑块上:整个手势放行给 SeekBar,不做平移拦截。 */
+    private var gestureOnSlider = false
+
+    /** 视野滑块(tag=desktop_slider)命中检测。 */
+    private fun hitSlider(x: Float, y: Float): Boolean {
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.tag == "desktop_slider") {
+                val r = android.graphics.Rect()
+                c.getHitRect(r)
+                if (r.contains(x.toInt(), y.toInt())) return true
+            }
+        }
+        return false
+    }
 
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         if (!panEnabled) return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                gestureOnSlider = hitSlider(ev.x, ev.y)
                 downX = ev.x; downY = ev.y
                 lastX = ev.x; lastY = ev.y
                 downTime = ev.eventTime
@@ -54,7 +70,7 @@ class PanInterceptLayout @JvmOverloads constructor(
                 panning = false
             }
             MotionEvent.ACTION_MOVE -> {
-                if (ev.pointerCount >= 2) {
+                if (gestureOnSlider || ev.pointerCount >= 2) {
                     panning = false
                     return false
                 }
@@ -66,11 +82,12 @@ class PanInterceptLayout @JvmOverloads constructor(
             }
             MotionEvent.ACTION_UP -> {
                 // 干净单击:放行给 WebView(noVNC 当鼠标),同时回调(弹键盘等)
-                if (!panning && ev.eventTime - downTime < 400 &&
+                if (!panning && !gestureOnSlider && ev.eventTime - downTime < 400 &&
                     abs(ev.x - downX) <= slop && abs(ev.y - downY) <= slop
                 ) {
                     onSingleTap?.invoke()
                 }
+                gestureOnSlider = false
             }
         }
         return panning
