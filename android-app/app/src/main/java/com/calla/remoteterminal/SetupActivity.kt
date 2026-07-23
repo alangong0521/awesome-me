@@ -281,12 +281,14 @@ class SetupActivity : AppCompatActivity() {
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.CENTER
-            ).apply { topMargin = dp(96) }
+            ).apply { topMargin = dp(132) } // 标题下一行是滚动图标,副标再往下让
         }
-        // App 图标"小脑袋":从屏幕左边旋转着滚进来,到中间偏右停住后眨个眼
+        // App 图标"小脑袋":主标题下面那行,从屏幕左边旋转着滚进来,到右侧停住后眨个眼
         val icon = android.widget.ImageView(this).apply {
             setImageResource(R.mipmap.ic_launcher)
-            layoutParams = android.widget.FrameLayout.LayoutParams(dp(84), dp(84), android.view.Gravity.CENTER)
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                dp(42), dp(42), android.view.Gravity.CENTER
+            ).apply { topMargin = dp(76) } // 标题行之下独占一行,不再压标题
         }
         // 内部使用声明(低调小字)
         val tagline = TextView(this).apply {
@@ -298,16 +300,16 @@ class SetupActivity : AppCompatActivity() {
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
                 android.view.Gravity.CENTER
-            ).apply { topMargin = dp(150) }
+            ).apply { topMargin = dp(188) }
         }
         overlay.addView(title)
         overlay.addView(subtitle)
         overlay.addView(tagline)
         overlay.addView(icon)
         root.addView(overlay)
-        // 图标滚入:左屏外 → 中间偏右,同时转两圈;停住后眨个眼(Y 压缩两下)
-        val stopX = dp(56).toFloat()
-        val startX = -(resources.displayMetrics.widthPixels / 2f + dp(84))
+        // 图标滚入:左屏外 → 本行右侧,同时转两圈;停住后眨个眼(Y 压缩两下)
+        val stopX = resources.displayMetrics.widthPixels / 2f - dp(90)
+        val startX = -(resources.displayMetrics.widthPixels / 2f + dp(42))
         icon.translationX = startX
         icon.post {
             icon.animate()

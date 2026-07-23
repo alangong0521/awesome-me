@@ -560,18 +560,26 @@ class TerminalActivity : AppCompatActivity(),
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true // noVNC 用 localStorage 记 VNC 密码等设置
                 settings.loadWithOverviewMode = false
-                // 双指捏合整页缩放(内建);单指触摸仍透传给 noVNC 当鼠标
-                settings.setSupportZoom(true)
-                settings.builtInZoomControls = true
-                settings.displayZoomControls = false
-                // 默认视野:桌面 URL 用 resize=off(画布原生分辨率,5120x1440 双屏),
-                // 初始缩放让可视宽度约 2560 CSS px(半宽),横纵滚动定位;
-                // 滚动条常驻,方便用户知道当前位置
                 settings.useWideViewPort = false
-                setInitialScale(desktopInitialScalePct(tab, container))
+                // vnc.html 的 viewport meta(initial-scale=1.0, maximum-scale=1.0,
+                // user-scalable=no)在新版 WebView 上会覆盖 setInitialScale 并禁掉内建
+                // 捏合缩放(v1.4.7 真机缩放失效的根因)。所以缩放/平移全由注入页面的
+                // __adv 视野管家驱动:display.scale 改画布 CSS 尺寸(noVNC 鼠标映射按
+                // _scale 换算,天然正确)+ CSS translate 平移。
+                // 注意千万别 setInitialScale(100):WebView 的百分比基准是物理像素,
+                // 100 会把 1 CSS px 钉成 1 物理 px(丢掉 density 适配),innerWidth 变成
+                // 物理宽,crop 缩放全算错。默认(initial-scale=1.0)才是 1 CSS px = 1 dp。
+                settings.setSupportZoom(false)
+                settings.builtInZoomControls = false
                 setScrollbarFadingEnabled(false)
                 setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                webViewClient = android.webkit.WebViewClient() // 链接都在本 WebView 内打开
+                addJavascriptInterface(DesktopBridge(tab.id), "AwesomeDesktop")
+                webViewClient = object : android.webkit.WebViewClient() {
+                    override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                        // 页面(重)加载后注入视野管家;它自己轮询 noVNC 状态并 center-crop
+                        view?.evaluateJavascript(desktopInjectJs, null)
+                    }
+                }
                 loadUrl(tab.desktopUrl ?: "http://${tab.host}:6080/vnc.html?autoconnect=true&resize=off")
             }
             container.addView(wv)
@@ -581,42 +589,144 @@ class TerminalActivity : AppCompatActivity(),
         addDesktopSliders(container, tab) // 底部水平 + 右侧垂直视野滑块
     }
 
-    /** 各桌面标签的 CSS translate 平移量(切标签保留)。 */
-    private val desktopPanOffsets = HashMap<Int, Pair<Float, Float>>()
+    // ---------- 桌面视野(JS 管家 __adv 为状态权威,Kotlin 只存镜像供滑块用) ----------
 
-    /** 单指拖拽平移:物理 px → CSS px(除以 WebView 当前缩放),累计后注入 transform。 */
-    private fun panDesktop(tab: Tab, dx: Float, dy: Float) {
-        val wv = tab.webView ?: return
-        val scale = if (wv.scale > 0f) wv.scale else 1f
-        val (ox, oy) = desktopPanOffsets[tab.id] ?: (0f to 0f)
-        applyDesktopTransform(tab, ox + dx / scale, oy + dy / scale)
+    /** 页面内视野管家:拥有 scale/tx/ty,自动 center-crop(按画布真实分辨率,不硬编码)、
+     *  越界 clamp、noVNC 连接/重置后重新施加;每次施加后经 AwesomeDesktop.report 回传镜像。 */
+    private val desktopInjectJs = """
+        window.__adv = window.__adv || (function(){
+          var st = {s:0, tx:0, ty:0, user:false};
+          function rfbOf(){ return (window.__UI && window.__UI.rfb) || null; }
+          function ok(rfb){ return rfb && rfb._display && rfb._canvas && rfb._canvas.width > 0 && rfb._canvas.height > 0; }
+          function vis(){ return {w: window.innerWidth, h: window.innerHeight}; }
+          function clamp(){
+            var rfb = rfbOf(); if (!ok(rfb)) return;
+            var w = rfb._canvas.width, h = rfb._canvas.height, v = vis();
+            var ox = w*st.s - v.w, oy = h*st.s - v.h;
+            st.tx = ox > 0 ? Math.min(0, Math.max(-ox, st.tx)) : (v.w - w*st.s)/2;
+            st.ty = oy > 0 ? Math.min(0, Math.max(-oy, st.ty)) : (v.h - h*st.s)/2;
+          }
+          function report(){
+            var rfb = rfbOf(); if (!ok(rfb) || !window.AwesomeDesktop) return;
+            var v = vis();
+            window.AwesomeDesktop.report(JSON.stringify({w:rfb._canvas.width, h:rfb._canvas.height,
+              vw:v.w, vh:v.h, s:st.s, tx:st.tx, ty:st.ty}));
+          }
+          function apply(){
+            if (!window.__UI) {
+              import('/app/ui.js').then(function(m){ window.__UI = m.default; apply(); }).catch(function(){});
+              return;
+            }
+            var rfb = rfbOf(); if (!ok(rfb)) return;
+            if (st.s <= 0) {
+              var v = vis();
+              st.s = Math.max(v.w/rfb._canvas.width, v.h/rfb._canvas.height);
+              st.tx = (v.w - rfb._canvas.width*st.s)/2;
+              st.ty = (v.h - rfb._canvas.height*st.s)/2;
+              st.user = false;
+            }
+            clamp();
+            if (rfb.scaleViewport) rfb.scaleViewport = false;
+            if (rfb.clipViewport) rfb.clipViewport = false;
+            if (Math.abs(rfb._display._scale - st.s) > 0.000001) rfb._display.scale = st.s;
+            var el = document.getElementById('noVNC_container');
+            if (el) { el.style.transformOrigin = '0 0'; el.style.transform = 'translate(' + st.tx + 'px,' + st.ty + 'px)'; }
+            report();
+          }
+          var lastKey = '';
+          setInterval(function(){
+            var rfb = rfbOf(); if (!ok(rfb)) return;
+            var v = vis();
+            var key = rfb._canvas.width + 'x' + rfb._canvas.height + '@' + v.w + 'x' + v.h;
+            if (key !== lastKey) {
+              lastKey = key;
+              // 远程分辨率或视口变了:用户没手动缩放过就按新几何重算 center-crop
+              if (!st.user) st.s = 0;
+            }
+            if (st.s <= 0 || Math.abs(rfb._display._scale - st.s) > 0.0001) apply();
+          }, 400);
+          return {
+            set: function(s, tx, ty){ st.s = s; st.tx = tx; st.ty = ty; st.user = true; clamp(); apply(); },
+            pan: function(dx, dy){ st.tx += dx; st.ty += dy; clamp(); apply(); },
+            pinch: function(f, fx, fy){
+              var rfb = rfbOf(); if (!ok(rfb)) return;
+              if (st.s <= 0) { apply(); return; }
+              var w = rfb._canvas.width, h = rfb._canvas.height, v = vis();
+              var fit = Math.min(v.w/w, v.h/h);
+              var s2 = Math.min(3, Math.max(fit*0.9, st.s*f)); var k = s2/st.s;
+              st.tx = fx - (fx - st.tx)*k; st.ty = fy - (fy - st.ty)*k; st.s = s2; st.user = true;
+              clamp(); apply();
+            }
+          };
+        })();
+    """.trimIndent()
+
+    /** 桌面视野镜像(CSS px;scale 是 noVNC display.scale),由页面 report 回传刷新。 */
+    private class DesktopViewState {
+        var fbW = 0f; var fbH = 0f    // 远程真实分辨率(画布原生)
+        var visW = 0f; var visH = 0f  // WebView 视口 CSS 尺寸
+        var scale = 0f; var tx = 0f; var ty = 0f
+        var ready = false
     }
+    private val desktopViewState = HashMap<Int, DesktopViewState>()
 
-    /** 统一写平移量并注入 CSS transform(拖拽和滑块共用)。 */
-    private fun applyDesktopTransform(tab: Tab, nx: Float, ny: Float) {
-        val wv = tab.webView ?: return
-        desktopPanOffsets[tab.id] = nx to ny
-        wv.evaluateJavascript(
-            "(()=>{const el=document.getElementById('noVNC_container')||document.body;" +
-            "el.style.transform='translate(${nx}px,${ny}px)';return 0;})()", null
-        )
-    }
-
-    // ---------- 桌面视野滑块(底部水平 + 右侧垂直,半透明,随缩放联动) ----------
-
-    private var sliderSyncToken = 0
-
-    /** 为桌面标签在容器上加两条视野滑块;重复调用先清掉旧的。 */
-    private fun addDesktopSliders(container: PanInterceptLayout, tab: Tab) {
-        val old = (0 until container.childCount).mapNotNull { i ->
-            container.getChildAt(i).takeIf { it.tag == "desktop_slider" }
+    /** 页面 → Kotlin 的视野镜像回传(JavascriptInterface,各 WebView 一个)。 */
+    private inner class DesktopBridge(private val tabId: Int) {
+        @android.webkit.JavascriptInterface
+        fun report(json: String) {
+            runOnUiThread {
+                val st = desktopViewState.getOrPut(tabId) { DesktopViewState() }
+                try {
+                    val o = JSONObject(json)
+                    st.fbW = o.optDouble("w", 0.0).toFloat()
+                    st.fbH = o.optDouble("h", 0.0).toFloat()
+                    st.visW = o.optDouble("vw", 0.0).toFloat()
+                    st.visH = o.optDouble("vh", 0.0).toFloat()
+                    st.scale = o.optDouble("s", 0.0).toFloat()
+                    st.tx = o.optDouble("tx", 0.0).toFloat()
+                    st.ty = o.optDouble("ty", 0.0).toFloat()
+                    st.ready = true
+                } catch (t: Throwable) {
+                    return@runOnUiThread
+                }
+                updateDesktopSliders()
+            }
         }
-        old.forEach { container.removeView(it) }
+    }
+
+    /** 向桌面标签页面发视野命令(__adv 由 onPageFinished 注入;页面未就绪时静默丢弃)。 */
+    private fun desktopJs(tab: Tab, body: String) {
+        tab.webView?.evaluateJavascript(
+            "(function(){ if (!window.__adv) return; $body })();", null)
+    }
+
+    /** 单指拖拽平移:物理 px → CSS px(scale 1.0 下 1 CSS px = density 物理 px),内容跟随手指。 */
+    private fun panDesktop(tab: Tab, dx: Float, dy: Float) {
+        val d = resources.displayMetrics.density
+        desktopJs(tab, "__adv.pan(" + (dx / d) + "," + (dy / d) + ");")
+    }
+
+    /** 双指捏合:factor 与焦点(物理 px → CSS)交给页面管家做不动点缩放。 */
+    private fun pinchDesktop(tab: Tab, factor: Float, fx: Float, fy: Float) {
+        val d = resources.displayMetrics.density
+        desktopJs(tab, "__adv.pinch(" + factor + "," + (fx / d) + "," + (fy / d) + ");")
+    }
+
+    // ---------- 桌面视野滑块(底部水平 + 右侧垂直贴屏右缘,半透明,随缩放联动) ----------
+
+    private var deskHSeek: android.widget.SeekBar? = null
+    private var deskVSeek: android.widget.SeekBar? = null
+    private var deskTabId = -1
+
+    /** 为桌面标签在容器上加两条视野滑块;重复调用先清掉旧的(含上个标签留下的)。 */
+    private fun addDesktopSliders(container: PanInterceptLayout, tab: Tab) {
+        removeDesktopSliders(container)
 
         val hSeek = android.widget.SeekBar(this).apply {
             tag = "desktop_slider"
             alpha = 0.3f
             max = 1
+            isEnabled = false // 视野就绪(有溢出)后才可用
             layoutParams = android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.MATCH_PARENT, dp(18),
                 android.view.Gravity.BOTTOM
@@ -626,18 +736,24 @@ class TerminalActivity : AppCompatActivity(),
             tag = "desktop_slider"
             alpha = 0.3f
             max = 1
-            rotation = 270f // 竖向滑块
+            isEnabled = false
+            rotation = 270f // 竖向滑块(progress 0 在下)
             layoutParams = android.widget.FrameLayout.LayoutParams(
                 dp(220), dp(18),
                 android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
             )
+            // 旋转绕未旋转盒(220×18)中心进行:END 对齐时竖条视觉中心偏左 (宽-高)/2,
+            // 右移该偏移,竖条才真正贴到容器(=屏幕)最右缘
+            translationX = (dp(220) - dp(18)) / 2f
         }
         val listener = object : android.widget.SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: android.widget.SeekBar, progress: Int, fromUser: Boolean) {
                 if (!fromUser) return
-                val (ox, oy) = desktopPanOffsets[tab.id] ?: (0f to 0f)
-                if (sb === hSeek) applyDesktopTransform(tab, -progress.toFloat(), oy)
-                else applyDesktopTransform(tab, ox, -progress.toFloat())
+                val st = desktopViewState[tab.id] ?: return
+                if (st.scale <= 0f) return
+                val tx = if (sb === hSeek) -progress.toFloat() else st.tx
+                val ty = if (sb === vSeek) -progress.toFloat() else st.ty
+                desktopJs(tab, "__adv.set(" + st.scale + "," + tx + "," + ty + ");")
             }
             override fun onStartTrackingTouch(sb: android.widget.SeekBar) {}
             override fun onStopTrackingTouch(sb: android.widget.SeekBar) {}
@@ -646,45 +762,35 @@ class TerminalActivity : AppCompatActivity(),
         vSeek.setOnSeekBarChangeListener(listener)
         container.addView(hSeek)
         container.addView(vSeek)
-
-        // 周期性把"当前缩放下的可视溢出"映射到滑块行程,并同步滑块位置
-        val token = ++sliderSyncToken
-        val sync = object : Runnable {
-            override fun run() {
-                if (token != sliderSyncToken || currentTab !== tab) return
-                val wv = tab.webView ?: return
-                val scale = if (wv.scale > 0f) wv.scale else 1f
-                val dm = resources.displayMetrics
-                val remoteW = if (tab.vncPort == 6081) 1080f else 5120f
-                val remoteH = if (tab.vncPort == 6081) 1920f else 1440f
-                // 可视 CSS 尺寸 = 物理 px / (scale × density)
-                val visW = wv.width / (scale * dm.density)
-                val visH = wv.height / (scale * dm.density)
-                val overX = (remoteW - visW).coerceAtLeast(0f)
-                val overY = (remoteH - visH).coerceAtLeast(0f)
-                hSeek.max = overX.toInt().coerceAtLeast(1)
-                vSeek.max = overY.toInt().coerceAtLeast(1)
-                val (ox, oy) = desktopPanOffsets[tab.id] ?: (0f to 0f)
-                val cx = ox.coerceIn(-overX, 0f)
-                val cy = oy.coerceIn(-overY, 0f)
-                if (cx != ox || cy != oy) applyDesktopTransform(tab, cx, cy)
-                hSeek.progress = (-cx).toInt().coerceIn(0, hSeek.max)
-                vSeek.progress = (-cy).toInt().coerceIn(0, vSeek.max)
-                container.postDelayed(this, 500)
-            }
-        }
-        container.post(sync)
+        deskHSeek = hSeek
+        deskVSeek = vSeek
+        deskTabId = tab.id
     }
-    /** 初始缩放百分比:center-crop——宽/高两向各算缩放比取较大者,短边贴满,
-     *  长边超出部分靠滑块/拖拽看(不再 center-inside 留粗黑边)。 */
-    private fun desktopInitialScalePct(tab: Tab, container: android.view.View): Int {
-        val remoteW = if (tab.vncPort == 6081) 1080f else 5120f
-        val remoteH = if (tab.vncPort == 6081) 1920f else 1440f
-        val dm = resources.displayMetrics
-        // WebView 的 SCALE_NORMAL(100) 下 CSS px = 物理 px / density
-        val cssW = container.width / dm.density
-        val cssH = container.height / dm.density
-        return (maxOf(cssW / remoteW, cssH / remoteH) * 100).toInt().coerceIn(10, 150)
+
+    /** 摘掉容器上所有视野滑块(切到非桌面标签/空态时必须调,否则滑块跨标签残留)。 */
+    private fun removeDesktopSliders(container: PanInterceptLayout) {
+        (0 until container.childCount).mapNotNull { i ->
+            container.getChildAt(i).takeIf { it.tag == "desktop_slider" }
+        }.forEach { container.removeView(it) }
+        deskHSeek = null
+        deskVSeek = null
+        deskTabId = -1
+    }
+
+    /** 按页面回传的镜像刷新滑块量程(=当前缩放下各向溢出)与位置;无溢出方向禁用。 */
+    private fun updateDesktopSliders() {
+        val hS = deskHSeek ?: return
+        val vS = deskVSeek ?: return
+        val st = desktopViewState[deskTabId] ?: return
+        if (!st.ready || st.scale <= 0f) return
+        val overX = (st.fbW * st.scale - st.visW).coerceAtLeast(0f)
+        val overY = (st.fbH * st.scale - st.visH).coerceAtLeast(0f)
+        hS.isEnabled = overX > 0.5f
+        vS.isEnabled = overY > 0.5f
+        hS.max = overX.toInt().coerceAtLeast(1)
+        vS.max = overY.toInt().coerceAtLeast(1)
+        if (!hS.isPressed) hS.progress = (-st.tx).toInt().coerceIn(0, hS.max)
+        if (!vS.isPressed) vS.progress = (-st.ty).toInt().coerceIn(0, vS.max)
     }
 
     // ---------- 标签长按菜单(重命名页签/关闭页签/取消) ----------
@@ -755,6 +861,7 @@ class TerminalActivity : AppCompatActivity(),
         currentTab = null
         terminalView.visibility = View.INVISIBLE
         for (t in tabs) t.webView?.visibility = View.GONE
+        removeDesktopSliders(findViewById(R.id.terminal_container))
         emptyHint.visibility = View.VISIBLE
         refreshTabBar()
         refreshStatus()
@@ -792,10 +899,11 @@ class TerminalActivity : AppCompatActivity(),
             terminalView.visibility = View.VISIBLE
             terminalView.alpha = 0f
             showDesktop(tab, container)
-            // 桌面手势:单指拖拽=平移(CSS translate 注入,noVNC 的 overflow:hidden 下
-            // WebView 原生滚动无效),双指捏合=缩放(WebView 内建),单击=noVNC 鼠标
+            // 桌面手势:单指拖拽=平移(CSS translate),双指捏合=自绘缩放(__adv pinch),
+            // 单击=noVNC 鼠标(vnc.html 的 viewport meta 禁用了 WebView 内建缩放)
             container.panTarget = tab.webView
             container.onPan = { dx, dy -> panDesktop(tab, dx, dy) }
+            container.onPinch = { f, fx, fy -> pinchDesktop(tab, f, fx, fy) }
             // 桌面标签上单击(noVNC 点击照常放行)时弹本机键盘:
             // 文本经 TerminalView 的 IME 输入连接 → onCodePoint → JS 注入 noVNC
             container.onSingleTap = {
@@ -808,7 +916,9 @@ class TerminalActivity : AppCompatActivity(),
             container.panEnabled = false
             container.panTarget = null
             container.onPan = null
+            container.onPinch = null
             container.onSingleTap = null
+            removeDesktopSliders(container) // 滑块只在桌面/浏览器标签可见
             for (t in tabs) t.webView?.visibility = View.GONE
             terminalView.alpha = 1f
             terminalView.visibility = View.VISIBLE
@@ -848,6 +958,7 @@ class TerminalActivity : AppCompatActivity(),
             wv.destroy()
         }
         tab.webView = null
+        desktopViewState.remove(tab.id)
         tabs.remove(tab)
         updateKeepAlive()
         if (tabs.isEmpty()) {

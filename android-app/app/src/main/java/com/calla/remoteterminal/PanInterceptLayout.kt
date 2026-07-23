@@ -32,6 +32,10 @@ class PanInterceptLayout @JvmOverloads constructor(
     /** 干净单击回调(位移<slop;事件仍照常放行给 WebView)。 */
     var onSingleTap: (() -> Unit)? = null
 
+    /** 双指捏合回调(factor 与焦点,容器坐标物理 px;WebView 内建缩放被 vnc.html
+     *  的 viewport meta 禁用,缩放由 Activity 注入 JS 自绘)。 */
+    var onPinch: ((factor: Float, focusX: Float, focusY: Float) -> Unit)? = null
+
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private var downX = 0f
     private var downY = 0f
@@ -39,17 +43,31 @@ class PanInterceptLayout @JvmOverloads constructor(
     private var lastY = 0f
     private var downTime = 0L
     private var panning = false
+    /** 双指缩放手势进行中:整段手势由 ScaleGestureDetector 消费,不透给 WebView。 */
+    private var scaling = false
     /** 本次手势落在视野滑块上:整个手势放行给 SeekBar,不做平移拦截。 */
     private var gestureOnSlider = false
 
-    /** 视野滑块(tag=desktop_slider)命中检测。 */
+    private val scaleDetector = android.view.ScaleGestureDetector(context,
+        object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: android.view.ScaleGestureDetector): Boolean {
+                onPinch?.invoke(detector.scaleFactor, detector.focusX, detector.focusY)
+                return true
+            }
+        })
+
+    /** 视野滑块(tag=desktop_slider)命中检测:按旋转/平移后的真实视觉区域判定
+     *  (getHitRect 只给未旋转的布局盒,右侧竖滑块会判偏)。 */
     private fun hitSlider(x: Float, y: Float): Boolean {
         for (i in 0 until childCount) {
             val c = getChildAt(i)
-            if (c.tag == "desktop_slider") {
-                val r = android.graphics.Rect()
-                c.getHitRect(r)
-                if (r.contains(x.toInt(), y.toInt())) return true
+            if (c.tag == "desktop_slider" && c.visibility == View.VISIBLE && c.isEnabled) {
+                val rc = android.graphics.RectF(0f, 0f, c.width.toFloat(), c.height.toFloat())
+                val m = android.graphics.Matrix()
+                m.setRotate(c.rotation, c.width / 2f, c.height / 2f)
+                m.postTranslate(c.left + c.translationX, c.top + c.translationY)
+                m.mapRect(rc)
+                if (rc.contains(x, y)) return true
             }
         }
         return false
@@ -66,10 +84,14 @@ class PanInterceptLayout @JvmOverloads constructor(
                 panning = false
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
-                // 出现第二根手指:交给 WebView 做捏合缩放,不再算平移
+                // 第二根手指落下:整段手势拦截做捏合缩放(WebView 收到 CANCEL,
+                // noVNC 不会误当拖动/点击;内建缩放已被 viewport meta 禁用)
+                scaling = true
                 panning = false
+                return true
             }
             MotionEvent.ACTION_MOVE -> {
+                if (scaling) return true
                 if (gestureOnSlider || ev.pointerCount >= 2) {
                     panning = false
                     return false
@@ -80,9 +102,12 @@ class PanInterceptLayout @JvmOverloads constructor(
                     return true // 从这里拦截;WebView 收到 CANCEL,noVNC 不会误当成拖动
                 }
             }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (scaling) return true // 缩放段的事件不泄漏给 WebView
+            }
             MotionEvent.ACTION_UP -> {
                 // 干净单击:放行给 WebView(noVNC 当鼠标),同时回调(弹键盘等)
-                if (!panning && !gestureOnSlider && ev.eventTime - downTime < 400 &&
+                if (!panning && !scaling && !gestureOnSlider && ev.eventTime - downTime < 400 &&
                     abs(ev.x - downX) <= slop && abs(ev.y - downY) <= slop
                 ) {
                     onSingleTap?.invoke()
@@ -94,7 +119,17 @@ class PanInterceptLayout @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(ev: MotionEvent): Boolean {
-        if (!panEnabled || ev.pointerCount >= 2) return false
+        if (!panEnabled) return false
+        if (scaling) {
+            scaleDetector.onTouchEvent(ev)
+            if (ev.actionMasked == MotionEvent.ACTION_UP ||
+                ev.actionMasked == MotionEvent.ACTION_CANCEL
+            ) {
+                scaling = false
+            }
+            return true
+        }
+        if (ev.pointerCount >= 2) return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
                 // 手指拖动方向 = 内容跟随方向
